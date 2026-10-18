@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+.env
+auth.json
+browser.json
+oauth.json
+cookies*.txt
+*.sqlite3*
+*.sock
+*.log

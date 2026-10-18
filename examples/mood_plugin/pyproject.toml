@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "myne-mood-plugin-example"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[project.entry-points."myne.plugins"]
+mood-example = "myne_mood_plugin:register"
