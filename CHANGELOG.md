@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+- Smooth 30 FPS meter rendering with eased attack/release, peak hold and
+  fractional terminal cells; audio polling keeps its existing bounded rate.
+- Gentle lyric-follow scrolling and pane reveals; seeks, pause and buffering
+  update immediately. Stale audio measurements clear promptly.
+- Reduced-motion support through `MYNE_REDUCED_MOTION=1`,
+  `TEXTUAL_ANIMATIONS=none`, or a dumb terminal. The standalone visualizer also
+  supports `--no-animation` and configurable rendering up to 60 FPS.
+
 ## 0.2.0
 
 - Live stereo RMS/peak visualizer and amplitude history from actual mpv audio

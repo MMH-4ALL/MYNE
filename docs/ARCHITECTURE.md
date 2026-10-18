@@ -33,6 +33,7 @@ and can be replaced with fakes without contacting external services.
 | Use cases | `service`, `mix` | Resolve, search, play, queue, mix and browse |
 | Lyrics | `lyrics` | Bounded API lookup/cache, recording validation, LRC parsing and synchronization |
 | Audio telemetry | `visualizer`, `playback.mpv` | Normalize real sample levels and expose an optional measuring filter |
+| Motion | `motion`, `tui`, `cli` | Time-based meter envelopes, local render cadence and reduced-motion preferences |
 | Composition | `container`, `config`, `plugins` | Inject configured providers and extensions |
 | Adapters | `providers.youtube`, `providers.local`, `storage` | Remote metadata, stream resolution, files and SQLite |
 | Playback | `playback.mpv`, `playback.daemon`, `playback.client` | Audio process ownership and local IPC |
@@ -112,6 +113,15 @@ removes the optional labeled `astats` audio filter; `levels` reads its metadata
 and adds current song identity, position and pause/playing flags. Unsupported
 analysis is isolated from normal playback. Values are normalized display
 coordinates from -60 to 0 dBFS, not FFT frequency bins or copied audio samples.
+
+Rendering is independent of telemetry: the TUI draws at 30 FPS while sampling
+the player about eight times per second; the standalone view caps player polling
+at ten per second regardless of its selected FPS. Analytical attack/release
+envelopes use elapsed time so their behavior is independent of frame rate. Peak
+markers hold briefly, stale frames expire, and transport changes clear visual
+energy immediately. Only new telemetry contributes to amplitude history.
+Reduced motion bypasses envelopes and decorative effects. Sequential lyric
+scrolling eases over 220 ms; initial positioning, seeking and track changes snap.
 
 The TUI fetches lyrics in a worker on song changes, rejects results for stale
 song identities, and selects a line by its timestamp on every position change.

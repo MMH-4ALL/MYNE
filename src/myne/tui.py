@@ -24,6 +24,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, DataTable, Footer, Input, ProgressBar, Static
 
 from myne.models import Track
+from myne.motion import AudioMotion, reduced_motion_requested
 
 if TYPE_CHECKING:
     from myne.lyrics import LyricsDocument
@@ -82,11 +83,21 @@ def _level(value: object) -> float:
 def _meter(rms: float, peak: float, width: int) -> Text:
     """Draw real RMS with a peak marker on a useful -60 to 0 dB scale."""
     # The daemon already maps -60..0 dBFS to 0..1; never logarithmize it twice.
-    filled = round(_level(rms) * width)
+    amount = _level(rms) * width
+    filled = int(amount)
+    fraction = min(7, int((amount - filled) * 8))
     peak_cell = min(width - 1, round(_level(peak) * (width - 1)))
     result = Text()
     for index in range(width):
-        character = "│" if peak > 0 and index == peak_cell else "█" if index < filled else "░"
+        character = (
+            "│"
+            if peak > 0 and index == peak_cell
+            else "█"
+            if index < filled
+            else "▏▎▍▌▋▊▉"[fraction - 1]
+            if index == filled and fraction
+            else "░"
+        )
         color = "#ffa990" if index > width * 0.9 else "#62d6bf"
         result.append(character, style=color if character != "░" else "#29404e")
     return result
@@ -178,8 +189,11 @@ class MyneApp(App[None]):
         Binding("ctrl+q", "quit", "Exit", priority=True),
     ]
 
-    def __init__(self, application: Application) -> None:
+    def __init__(self, application: Application, *, reduced_motion: bool | None = None) -> None:
         super().__init__()
+        self._reduced_motion = reduced_motion_requested() if reduced_motion is None else reduced_motion
+        if self._reduced_motion:
+            self.animation_level = "none"
         self.service = application
         self.results: list[Track] = []
         self.queued: list[Track] = []
@@ -196,6 +210,9 @@ class MyneApp(App[None]):
         self._levels_refreshing = False
         self._visualizer_configuring = False
         self._levels: dict[str, Any] = {}
+        self._audio_motion = AudioMotion(reduced_motion=self._reduced_motion)
+        self._audio_rendered: Text | str | None = None
+        self._time_rendered = ""
         self._audio_history: deque[float] = deque(maxlen=100)
         self._lyrics_visible = False
         self._lyrics_user_toggled = False
@@ -206,6 +223,7 @@ class MyneApp(App[None]):
         self._lyrics_error: str | None = None
         self._lyrics_loading = False
         self._lyric_index = -2
+        self._last_lyric_position: float | None = None
 
     @property
     def _main_screen(self) -> Screen[Any]:
@@ -252,7 +270,7 @@ class MyneApp(App[None]):
         self.refresh_playback()
         self.set_interval(1.0, self.refresh_playback)
         self.set_interval(0.12, self.sample_audio)
-        self.set_interval(0.1, self.tick_playback)
+        self.set_interval(0.12 if self._reduced_motion else 1 / 30, self.tick_playback)
         self._layout_lyrics()
         self.configure_visualizer()
 
@@ -271,7 +289,12 @@ class MyneApp(App[None]):
         wide = self.size.width >= 110
         if not self._lyrics_user_toggled:
             self._lyrics_visible = wide
-        self._main_screen.query_one("#lyrics-pane").display = self._lyrics_visible
+        pane = self._main_screen.query_one("#lyrics-pane")
+        was_visible = pane.display
+        pane.display = self._lyrics_visible
+        if self._lyrics_visible and not was_visible and not self._reduced_motion:
+            pane.styles.opacity = 0.0
+            pane.styles.animate("opacity", 1.0, duration=0.14, easing="out_cubic", level="basic")
         self._main_screen.query_one("#library").set_class(self._lyrics_visible and not wide, "compact-lyrics")
         if self._lyrics_visible:
             self.call_after_refresh(self._render_lyrics, force=True)
@@ -504,7 +527,10 @@ class MyneApp(App[None]):
             duration = None
         progress = max(0.0, min(100.0, position / duration * 100)) if duration else 0
         self._main_screen.query_one("#progress", ProgressBar).update(total=100, progress=progress)
-        self._main_screen.query_one("#time", Static).update(f"{_clock(position)} / {_clock(duration)}")
+        label = f"{_clock(position)} / {_clock(duration)}"
+        if label != self._time_rendered:
+            self._main_screen.query_one("#time", Static).update(label)
+            self._time_rendered = label
         self._render_lyrics(position)
         self._render_audio()
 
@@ -521,10 +547,12 @@ class MyneApp(App[None]):
                 if requested == self._visualizer_enabled:
                     if result.get("error"):
                         self._levels = {"available": False, "error": str(result["error"])}
+                        self._audio_motion.reset()
                     break
         except Exception as exc:
             self._visualizer_connected = False
             self._levels = {"available": False, "error": str(exc)}
+            self._audio_motion.reset()
         finally:
             self._visualizer_configuring = False
             self._render_audio()
@@ -532,6 +560,7 @@ class MyneApp(App[None]):
     def action_visualizer(self) -> None:
         self._visualizer_enabled = not self._visualizer_enabled
         self._audio_history.clear()
+        self._audio_motion.reset()
         self._main_screen.query_one("#audio-meter").display = self._visualizer_enabled
         self._main_screen.query_one("#player").set_class(not self._visualizer_enabled, "no-visualizer")
         self.configure_visualizer()
@@ -557,6 +586,7 @@ class MyneApp(App[None]):
                 and (levels.get("provider"), levels.get("track_id")) != requested_track
             ):
                 self._levels = {}
+                self._audio_motion.reset()
                 return
             self._levels = levels
             track = self._snapshot.get("track") or {}
@@ -566,6 +596,13 @@ class MyneApp(App[None]):
                     self._snapshot_at = time.monotonic()
                 self._snapshot["paused"] = levels.get("paused", self._snapshot.get("paused"))
                 self._snapshot["playing"] = levels.get("playing", self._snapshot.get("playing", True))
+            self._audio_motion.update(
+                {
+                    **levels,
+                    "paused": self._snapshot.get("paused", False),
+                    "playing": self._snapshot.get("playing", True),
+                }
+            )
             if (
                 levels.get("available")
                 and not self._snapshot.get("paused")
@@ -575,6 +612,7 @@ class MyneApp(App[None]):
                 self._audio_history.append(max((_level(value) for value in rms), default=0.0))
         except Exception as exc:
             self._levels = {"available": False, "error": str(exc)}
+            self._audio_motion.reset()
         finally:
             self._levels_refreshing = False
             self._render_audio()
@@ -583,28 +621,36 @@ class MyneApp(App[None]):
         if not self._main_screen.query("#audio-meter"):
             return
         meter = self._main_screen.query_one("#audio-meter", Static)
+
+        def show(value: str | Text) -> None:
+            if value != self._audio_rendered:
+                meter.update(value)
+                self._audio_rendered = value
+
         if not self._visualizer_enabled:
             return
         if not self._snapshot.get("track"):
-            meter.update(
-                "AUDIO LEVELS · waiting for playback…\nStereo RMS / peak from mpv · v toggles visualizer"
-            )
+            self._audio_motion.reset()
+            show("AUDIO LEVELS · waiting for playback…\nStereo RMS / peak from mpv · v toggles visualizer")
             return
         if self._snapshot.get("paused"):
-            meter.update("AUDIO LEVELS · paused\nResume playback to continue the live meter.")
+            self._audio_motion.reset()
+            show("AUDIO LEVELS · paused\nResume playback to continue the live meter.")
             return
-        if not self._levels.get("available"):
-            message = self._levels.get("error")
-            meter.update(
+        if not self._snapshot.get("playing", True):
+            self._audio_motion.reset()
+            show("AUDIO LEVELS · buffering\nWaiting for the audio stream to continue.")
+            return
+        levels = self._audio_motion.frame()
+        if not levels.get("available"):
+            message = self._levels.get("error") or levels.get("error")
+            show(
                 _plain(f"AUDIO LEVELS · {'unavailable' if message else 'connecting…'}")
                 + (f"\n{_plain(message)}" if message else "\nWaiting for audio samples from mpv.")
             )
             return
-        if not self._snapshot.get("playing", True):
-            meter.update("AUDIO LEVELS · buffering\nWaiting for the audio stream to continue.")
-            return
-        rms = list(self._levels.get("rms") or [0.0])
-        peaks = list(self._levels.get("peak") or rms)
+        rms = list(levels.get("rms") or [0.0])
+        peaks = list(levels.get("peak") or rms)
         width = max(8, min(48, meter.size.width - 17))
         rendered = Text()
         for channel in range(min(2, len(rms))):
@@ -622,7 +668,7 @@ class MyneApp(App[None]):
         rendered.append(
             "".join(symbols[min(7, round(_level(value) * 7))] for value in history), style="#62d6bf"
         )
-        meter.update(rendered)
+        show(rendered)
 
     def _sync_lyrics_track(self, track_data: dict[str, Any] | None) -> None:
         track = Track.from_dict(track_data) if track_data else None
@@ -637,6 +683,8 @@ class MyneApp(App[None]):
         self._lyrics_pending = track
         self._audio_history.clear()
         self._levels = {}
+        self._audio_motion.reset()
+        self._last_lyric_position = None
         self._main_screen.query_one("#lyrics-scroll", VerticalScroll).scroll_to(y=0, animate=False)
         self._render_lyrics(force=True)
         if track:
@@ -673,12 +721,12 @@ class MyneApp(App[None]):
         if not self._main_screen.query("#lyrics-body"):
             return
         document = self._lyrics_document
-        current = (
-            document.current_index(position if position is not None else self._playback_position())
-            if document and document.synced
-            else None
-        )
+        position = self._playback_position() if position is None else position
+        previous_position = self._last_lyric_position
+        self._last_lyric_position = position
+        current = document.current_index(position) if document and document.synced else None
         index = current if current is not None else -1
+        previous_index = self._lyric_index
         if not force and index == self._lyric_index:
             return
         self._lyric_index = index
@@ -724,13 +772,38 @@ class MyneApp(App[None]):
                 for line in document.synced[: max(0, index)]
             )
             # Layout must measure the new wrapped content before clamping scroll.
+            animate = bool(
+                not self._reduced_motion
+                and not force
+                and previous_index >= 0
+                and index == previous_index + 1
+                and not self._snapshot.get("paused")
+                and previous_position is not None
+                and 0 <= position - previous_position < 0.8
+            )
             self.call_after_refresh(
-                scroll.scroll_to, y=max(0, row_offset - scroll.size.height // 2), animate=False, force=True
+                self._scroll_lyrics_to,
+                max(0, row_offset - scroll.size.height // 2),
+                self._lyrics_key,
+                index,
+                animate,
             )
         else:
             plain = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", document.plain)
             body.update(plain or "No lyrics found for this track.")
             source.update(_plain(f"{document.source} · plain lyrics · scroll ↑ ↓"))
+
+    def _scroll_lyrics_to(self, target: int, key: tuple[str, str] | None, index: int, animate: bool) -> None:
+        if self._lyrics_key != key or self._lyric_index != index or not self._lyrics_visible:
+            return
+        self._main_screen.query_one("#lyrics-scroll", VerticalScroll).scroll_to(
+            y=target,
+            animate=animate,
+            duration=0.22,
+            easing="out_cubic",
+            force=True,
+            immediate=True,
+        )
 
     def action_help(self) -> None:
         self.push_screen(

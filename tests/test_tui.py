@@ -476,3 +476,78 @@ def test_synced_lyrics_scroll_counts_wrapped_rows_in_compact_view() -> None:
             assert app.query_one("#queue").region.width >= 20
 
     asyncio.run(scenario())
+
+
+def test_subcell_meter_preserves_small_measured_changes() -> None:
+    assert _meter(0.5125, 0.0, 20).plain == "█" * 10 + "▎" + "░" * 9
+    assert len(_meter(0.999, 1.0, 20).plain) == 20
+
+
+def test_animation_frames_do_not_repeat_telemetry_or_fabricate_history() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.current = service.tracks[0]
+        app = MyneApp(service, reduced_motion=False)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)):
+            await settle(app)
+            count = service.levels_calls
+            history = list(app._audio_history)
+            for _ in range(60):
+                app.tick_playback()
+            assert service.levels_calls == count
+            assert list(app._audio_history) == history
+            service.paused = True
+            app._show_playback(service.now())
+            assert app._audio_motion.frame()["available"] is False
+            assert "paused" in str(app.query_one("#audio-meter", Static).render())
+
+    asyncio.run(scenario())
+
+
+def test_lyrics_ease_on_line_advance_but_snap_after_seek() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.current = service.tracks[0]
+        service.position = 1.8
+        service.paused = True
+        service.document = LyricsDocument(
+            "Test",
+            "Author",
+            "",
+            (
+                LyricsLine(1.0, "Original first line"),
+                LyricsLine(2.0, "Original second line"),
+                LyricsLine(20.0, "Original third line"),
+            ),
+            "Fixture",
+        )
+        app = MyneApp(service, reduced_motion=False)  # type: ignore[arg-type]
+        app.animation_level = "full"
+        async with app.run_test(size=(120, 36)) as pilot:
+            await settle(app)
+            scroll = app.query_one("#lyrics-scroll")
+            calls = []
+            scroll.scroll_to = lambda **kwargs: calls.append(kwargs)
+            app._snapshot.update(position=1.9, paused=False, playing=True)
+            app._snapshot_at = time.monotonic()
+            app.tick_playback()
+            app._snapshot.update(position=2.01)
+            app._snapshot_at = time.monotonic()
+            app.tick_playback()
+            await pilot.pause(0.04)
+            assert calls[-1]["animate"] is True
+            assert calls[-1]["duration"] == 0.22
+            app._snapshot.update(position=20.1)
+            app._snapshot_at = time.monotonic()
+            app.tick_playback()
+            await pilot.pause(0.04)
+            assert calls[-1]["animate"] is False
+
+    asyncio.run(scenario())
+
+
+def test_reduced_motion_disables_envelopes_and_textual_effects(monkeypatch) -> None:
+    monkeypatch.setenv("MYNE_REDUCED_MOTION", "1")
+    app = MyneApp(FakeApplication())  # type: ignore[arg-type]
+    assert app.animation_level == "none"
+    assert app._audio_motion.reduced_motion is True

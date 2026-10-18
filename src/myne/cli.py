@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import time
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from functools import wraps
 from typing import Any, Callable, ParamSpec, TypeVar
@@ -22,6 +23,7 @@ from myne import __version__
 from myne.config import Config
 from myne.errors import MyneError
 from myne.models import Track
+from myne.motion import AudioMotion, reduced_motion_requested
 from myne.service import Application
 
 app = typer.Typer(name="myne", help="My Music. My Queue. My Experience. Myne CLI.", no_args_is_help=True)
@@ -293,33 +295,64 @@ def lyrics(
     console.print(Text(f"Source · {document.source}", style="dim"))
 
 
+def _audio_bar(value: float, width: int) -> tuple[str, str]:
+    """Draw measured amplitude at one eighth of a terminal cell resolution."""
+    cells = round(max(0.0, min(1.0, value)) * width * 8)
+    full, partial = divmod(cells, 8)
+    filled = "█" * full + ("▏▎▍▌▋▊▉"[partial - 1] if partial else "")
+    return filled, "░" * (width - full - bool(partial))
+
+
 def _audio_frame(levels: dict[str, Any], history: deque[float], width: int = 42) -> Text:
+    """Render a frame without adding invented samples to amplitude history."""
     frame = Text("MYNE CLI · LIVE AUDIO\n", style="bold cyan")
     if levels.get("error"):
         frame.append(str(levels["error"]) + "\n", style="yellow")
     if not levels.get("available"):
         state = "Paused" if levels.get("paused") else "Waiting for audio measurements"
         frame.append(state + "\n", style="dim")
-        history.clear()
     else:
         rms = levels.get("rms") or []
         peak = levels.get("peak") or []
         for index, value in enumerate(rms[:2]):
-            fill = round(max(0, min(1, float(value))) * width)
+            filled, empty = _audio_bar(float(value), width)
             label = "M" if len(rms) == 1 else ("L" if index == 0 else "R")
             frame.append(f"{label}  ", style="bold")
-            frame.append("█" * fill, style="cyan")
-            frame.append("░" * (width - fill), style="grey35")
+            frame.append(filled, style="cyan")
+            frame.append(empty, style="grey35")
             peak_value = float(peak[index]) if index < len(peak) else float(value)
             frame.append(f"  {max(-60.0, min(0.0, peak_value * 60 - 60)):5.1f} dBFS peak\n", style="dim")
-        if rms:
-            history.append(sum(float(value) for value in rms) / len(rms))
         blocks = "▁▂▃▄▅▆▇█"
         frame.append("AMPLITUDE HISTORY\n", style="dim")
         frame.append("".join(blocks[min(7, max(0, int(value * 7)))] for value in history), style="cyan")
         frame.append("\n")
     frame.append("Actual sample levels · -60 to 0 dBFS · Ctrl+C closes this view", style="dim")
     return frame
+
+
+class _AudioTelemetry:
+    """Poll at most ten times per second with one bounded IPC request in flight."""
+
+    def __init__(self, read: Callable[[], dict[str, Any]]) -> None:
+        self._read = read
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="myne-levels")
+        self._future: Future[dict[str, Any]] | None = None
+        self._next_poll = 0.0
+
+    def poll(self, now: float) -> dict[str, Any] | None:
+        sample = None
+        if self._future is not None and self._future.done():
+            sample = self._future.result()
+            self._future = None
+        if self._future is None and now >= self._next_poll:
+            self._future = self._executor.submit(self._read)
+            self._next_poll = now + 0.1
+        return sample
+
+    def close(self) -> None:
+        # The service's live IPC client has a two second timeout. Do not block
+        # terminal restoration waiting for a request that is already running.
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 @app.command("visualize")
@@ -329,8 +362,9 @@ def visualize(
     seconds: float | None = typer.Option(
         None, "--seconds", min=0.1, max=3600, help="Stop after this many seconds."
     ),
-    fps: int = typer.Option(10, "--fps", min=1, max=20),
+    fps: int = typer.Option(30, "--fps", min=1, max=60, help="Maximum terminal frames per second."),
     off: bool = typer.Option(False, "--off", help="Disable the audio analysis filter."),
+    no_animation: bool = typer.Option(False, "--no-animation", help="Use static measured meter updates."),
 ) -> None:
     """Show a live stereo visualizer for the playing music."""
     service = application(ctx)
@@ -338,24 +372,42 @@ def visualize(
     if off:
         emit(ctx, state, "Visualizer disabled.")
         return
-    if state.get("error"):
-        raise MyneError(str(state["error"]))
-    if not state.get("track_id"):
-        service.visualizer(False)
-        raise MyneError("Start a song with myne play, then run myne visualize.")
-    history: deque[float] = deque(maxlen=42)
+    telemetry = None
     try:
+        if state.get("error"):
+            raise MyneError(str(state["error"]))
+        if not state.get("track_id"):
+            raise MyneError("Start a song with myne play, then run myne visualize.")
         if ctx.obj.get("json"):
             emit(ctx, service.audio_levels())
             return
+        reduced = no_animation or reduced_motion_requested()
+        render_fps = min(fps, 10) if reduced else fps
+        motion = AudioMotion(reduced_motion=reduced, stale_after=0.6)
+        history: deque[float] = deque(maxlen=42)
+        telemetry = _AudioTelemetry(service.audio_levels)
         started = time.monotonic()
-        with Live(console=console, refresh_per_second=fps, auto_refresh=False) as live:
-            while seconds is None or time.monotonic() - started < seconds:
-                live.update(_audio_frame(service.audio_levels(), history), refresh=True)
-                time.sleep(1 / fps)
+        deadline = started + seconds if seconds is not None else float("inf")
+        with Live(console=console, refresh_per_second=render_fps, auto_refresh=False) as live:
+            while (now := time.monotonic()) < deadline:
+                sample = telemetry.poll(now)
+                if sample is not None:
+                    motion.update(sample, now=now)
+                    raw = sample.get("rms") or []
+                    if sample.get("available") and raw:
+                        history.append(sum(float(value) for value in raw) / len(raw))
+                frame = motion.frame(now=now)
+                if not frame.get("available"):
+                    history.clear()
+                live.update(_audio_frame(frame, history), refresh=True)
+                pause = min(now + 1 / render_fps, deadline) - time.monotonic()
+                if pause > 0:
+                    time.sleep(pause)
     except KeyboardInterrupt:
         pass
     finally:
+        if telemetry is not None:
+            telemetry.close()
         service.visualizer(False)
 
 

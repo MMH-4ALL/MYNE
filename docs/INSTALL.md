@@ -74,6 +74,8 @@ myne lyrics               # plain lyrics with their source
 myne lyrics --lrc          # timestamped LRC when available
 myne lyrics --refresh      # bypass the cache and look up this track again
 myne visualize            # standalone audio meter; Ctrl+C closes the view
+myne visualize --fps 60   # local rendering rate; audio polling stays bounded
+myne visualize --no-animation
 ```
 
 LRCLIB supplies plain/timed lyrics without a key. Myne sends the current song's
@@ -88,6 +90,13 @@ Homebrew mpv packages generally provide it. There is no microphone capture,
 audio upload, extra player process or full-song download. Meters show decoded
 sample levels before system output mixing. If analysis is unavailable, audio
 continues normally and the UI explains why the meters are quiet.
+
+The TUI renders at 30 FPS and the standalone visualizer defaults to the same
+rate, independently of its audio polling. Meters ease between actual measured
+samples, retain peaks briefly, and clear on pause, buffering or stale data. Set
+`MYNE_REDUCED_MOTION=1` to use static measured updates and disable decorative
+transitions. `TEXTUAL_ANIMATIONS=none` and `TERM=dumb` also reduce motion;
+`NO_COLOR` controls color without changing animation preferences.
 
 After upgrading from Myne 0.1, restart the existing player with `myne shutdown`,
 then `myne play`. UI telemetry uses the updated local IPC protocol.

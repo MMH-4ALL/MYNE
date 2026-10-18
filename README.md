@@ -137,6 +137,13 @@ between tracks and lyrics. Timed lines follow playback, pause and seeking. Plain
 lyrics remain scrollable and show their source. Closing the TUI leaves the player
 running. Network and database work runs outside the UI event loop.
 
+Meters render smoothly at 30 FPS with eased attack/release, peak hold, and
+fractional block edges. Audio is polled separately at a bounded rate, so smoother
+rendering adds no provider requests. Lyrics follow with a gentle scroll; pause,
+buffering and seeking take effect immediately. For reduced motion, set
+`MYNE_REDUCED_MOTION=1` (or `TEXTUAL_ANIMATIONS=none`). The standalone view also
+supports `myne visualize --fps 60` and `myne visualize --no-animation`.
+
 The visualizer displays decoded audio RMS and peak levels on a -60 to 0 dBFS
 scale; it is an amplitude meter/history, rather than a frequency spectrum. Pause,
 buffering, silence and missing measurements have distinct quiet states. Minimal

@@ -1,5 +1,22 @@
 # Validation record
 
+## Version 0.2.1 animation update
+
+Validated on 18 October 2026 with **224 passing tests**, Ruff lint and mypy
+across 23 application modules. Time-based motion tests compare 10/30/60/144 FPS
+and cover peak hold, pause/stop, stale expiry, track/channel changes and reduced
+motion. UI/CLI regressions verify that extra drawing frames never add telemetry
+requests or fabricated history and that seeks snap while sequential lyrics ease.
+The existing real-mpv integration tests also pass.
+
+A four-second animated capture of the actual TUI was visually checked across
+58 distinct frames, including fractional meter changes, lyric reveal/follow and
+cleared meters during pause. Its telemetry and original lyrics are explicitly
+labelled as demonstration data. The playback/provider stack is unchanged from
+the live checks recorded below.
+
+## Version 0.2.0 live audio and lyrics checks
+
 Version 0.2.0 validated on 18 October 2026 using Python 3.13.5, Linux and mpv 0.40.0.
 
 - **164 tests passed**, covering providers/extraction, SQLite queue recovery and
