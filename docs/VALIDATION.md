@@ -1,30 +1,30 @@
 # Validation record
 
-Validated on 18 October 2026 using Python 3.13.5 on Linux.
+Version 0.2.0 validated on 18 October 2026 using Python 3.13.5, Linux and mpv 0.40.0.
 
-- **95 tests passed**, including injected provider/extractor tests, SQLite queue
-  recovery and concurrency, plugin activation/rollback, AI response validation,
-  background daemon and fake-mpv subprocess integration, transport controls,
-  radio refill/failure handling, and headless TUI interaction.
-- Ruff lint passed.
-- mypy passed across all 20 application modules.
-- Source distribution and Python wheel built successfully with Hatchling.
-- Live anonymous YouTube Music search returned song metadata.
-- Live yt-dlp extraction returned an HTTPS audio stream and headers with
-  `download=False`; no full song was downloaded.
-- The actual Textual interface was exported and visually checked at 120×36 and
-  80×24 terminal sizes. The README screenshot uses sample metadata.
+- **164 tests passed**, covering providers/extraction, SQLite queue recovery and
+  concurrency, plugins, AI response handling, player process/IPC lifecycle,
+  real audio measurements, lyrics/cache/LRC parsing, and headless TUI interaction.
+- Ruff lint passed; mypy passed across all 22 application modules.
+- Live YouTube playback through real mpv with a silent output sink succeeded:
+  stereo audio measurements were available and playback time advanced.
+- A generated stereo WAV with a 20 dB channel difference produced the expected
+  measured RMS and peak difference. Real mpv tests cover pause/seek/stop and
+  daemon IPC, without requiring sound hardware or copyrighted test audio.
+- Live LRCLIB lookup returned timed lyrics for the streamed song. No API key was
+  used, no lyric text was printed in validation logs, and no audio was uploaded.
+- Lyrics tests cover missing/instrumental/plain/timed states, artist/title/duration
+  matching, rate limits, caching, malformed responses and seek-safe timing.
+- TUI tests cover forward/backward seek highlighting, pause/buffering, late lyrics
+  for an old track, wrapping/autoscroll, and single in-flight audio polling.
+- The actual Textual interface was rendered and visually checked at 120×36 and
+  80×24. The documentation screenshot uses explicit sample lyrics/telemetry.
 
-The environment did not contain an mpv executable or an audio output device, so
-real mpv/audio-device playback was not verified. Fake-mpv integration exercises
-process startup, JSON IPC, stream handoff, and controls. The inherited-FD crash
-lifeline follows mpv's documented IPC-client behavior; its real-mpv exit behavior
-also remains a manual integration check.
+A physical speaker/sound-device path was not tested. Audio decoding, streaming,
+mpv filtering, the playback clock and IPC controls were exercised with mpv's
+real-time null output. Upstream song availability, account/region restrictions
+and optional authentication still depend on the user's environment.
 
-AI mixes were verified with simulated HTTP responses; no paid AI service was
-called. Live cookies/authentication, region restrictions, and provider rate
-limits require validation with the user's own account/environment.
-
-The included GitHub Actions workflow runs the offline suite, lint, types and
-package build on Python 3.12 and 3.13. Its hosted result is separate from the
-local validation above.
+The GitHub Actions workflow installs mpv/FFmpeg and runs tests, lint, types and
+package builds on Python 3.12 and 3.13. Its hosted result is separate from local
+validation above.

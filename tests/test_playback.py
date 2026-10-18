@@ -12,6 +12,7 @@ import pytest
 from myne.errors import PlaybackError
 from myne.models import Stream
 from myne.playback.mpv import MpvEngine, private_directory
+from myne.visualizer import empty_levels
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix IPC")
@@ -96,3 +97,101 @@ def test_old_playlist_end_event_cannot_finish_new_track(tmp_path: Path) -> None:
         ]
     )
     assert engine.poll_events() == [{"event": "end-file", "reason": "eof", "playlist_entry_id": 9}]
+
+
+def test_visualizer_stays_lazy_and_disabled_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = MpvEngine(tmp_path / "mpv.sock")
+    calls: list[tuple] = []
+    monkeypatch.setattr(engine, "command", lambda *args, **_kwargs: calls.append(args))
+    assert engine.audio_levels() == empty_levels()
+    engine.enable_visualizer(True)
+    assert engine.audio_levels() == empty_levels()
+    engine.enable_visualizer(False)
+    assert calls == []  # Opening a TUI does not launch mpv or touch the audio chain.
+
+
+def test_visualizer_attaches_once_and_removes_only_its_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = MpvEngine(tmp_path / "mpv.sock")
+    calls: list[tuple] = []
+    monkeypatch.setattr(engine, "command", lambda *args, **_kwargs: calls.append(args))
+    with socket.socket() as connection:
+        monkeypatch.setattr(engine, "_socket", connection)
+        engine.enable_visualizer(True)
+        engine.enable_visualizer(True)
+        engine.enable_visualizer(False)
+    assert calls == [
+        ("af", "add", "@myne_levels:lavfi=[astats=metadata=1:reset=1]"),
+        ("af", "remove", "@myne_levels"),
+    ]
+    assert engine.audio_levels() == empty_levels()
+
+
+def test_unsupported_visualizer_filter_never_raises_playback_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = MpvEngine(tmp_path / "mpv.sock")
+
+    def unsupported(*args: object, **_kwargs: object) -> int:
+        if args[0] == "af":
+            raise PlaybackError("mpv command failed: error running command")
+        return 70
+
+    monkeypatch.setattr(engine, "command", unsupported)
+    with socket.socket() as connection:
+        monkeypatch.setattr(engine, "_socket", connection)
+        engine.enable_visualizer(True)
+        assert engine.audio_levels()["available"] is False
+        assert "astats" in str(engine.audio_levels()["error"])
+        assert engine.command("get_property", "volume") == 70
+        engine.enable_visualizer(False)
+        assert engine.audio_levels() == empty_levels()
+
+
+@pytest.mark.parametrize("state", [{"pause": True}, {"core-idle": True}, {"pause": None}])
+def test_visualizer_clears_on_pause_idle_or_unavailable_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: dict[str, object]
+) -> None:
+    engine = MpvEngine(tmp_path / "mpv.sock")
+    calls: list[tuple] = []
+
+    def properties(*args: str, **_kwargs: object) -> object:
+        calls.append(args)
+        return state.get(args[1], False) if args[0] == "get_property" else None
+
+    monkeypatch.setattr(engine, "command", properties)
+    with socket.socket() as connection:
+        monkeypatch.setattr(engine, "_socket", connection)
+        engine.enable_visualizer(True)
+        assert engine.audio_levels() == empty_levels()
+    assert ("get_property", "af-metadata/myne_levels") not in calls
+
+
+def test_visualizer_uses_live_metadata_and_clears_during_track_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = MpvEngine(tmp_path / "mpv.sock")
+    metadata: dict[str, str] = {
+        "lavfi.astats.1.RMS_level": "-30",
+        "lavfi.astats.1.Peak_level": "-6",
+    }
+
+    def properties(*args: str, **_kwargs: object) -> object:
+        if args == ("get_property", "af-metadata/myne_levels"):
+            return metadata
+        return False
+
+    monkeypatch.setattr(engine, "command", properties)
+    with socket.socket() as connection:
+        monkeypatch.setattr(engine, "_socket", connection)
+        engine.enable_visualizer(True)
+        assert engine.audio_levels()["rms"] == [0.5]
+        engine._record_event({"event": "start-file"})
+        assert engine.audio_levels() == empty_levels()
+        engine._record_event({"event": "file-loaded"})
+        assert engine.audio_levels()["rms"] == [0.5]
+        metadata.clear()
+        assert engine.audio_levels() == empty_levels()

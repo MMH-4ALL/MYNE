@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 from myne.config import Config
 from myne.container import create_registry
 from myne.errors import MyneError, PlaybackError, ProviderError
+from myne.lyrics import LyricsDocument, LyricsService
 from myne.mix import AIMixStrategy, MixService
 from myne.models import Album, Artist, Track
 from myne.playback.client import PlayerClient
@@ -23,11 +24,14 @@ class Application:
         store: Store | None = None,
         registry: PluginRegistry | None = None,
         player: PlayerClient | None = None,
+        lyrics_service: LyricsService | None = None,
     ) -> None:
         self.config = config
         self.store = store or Store(config.database)
         self.registry = registry or create_registry(config)
         self.player = player or PlayerClient(config)
+        self._live_player = player or PlayerClient(config, timeout=2.0)
+        self._lyrics = lyrics_service or LyricsService(self.registry.provider, config.data_dir)
 
     @property
     def provider(self) -> MusicProvider:
@@ -90,11 +94,12 @@ class Application:
 
     def now(self) -> dict[str, Any]:
         try:
-            return self.player.request("now")
+            return self._live_player.request("now")
         except PlaybackError as exc:
             return {
                 "track": None,
                 "paused": False,
+                "playing": False,
                 "position": 0.0,
                 "duration": None,
                 "volume": self.config.volume,
@@ -108,11 +113,38 @@ class Application:
         return self.player.request(action, **payload)
 
     def lyrics(self) -> str | None:
-        data = self.now().get("track")
-        if not data:
+        document = self.lyrics_document()
+        if document is None:
+            return None
+        return "Instrumental · no sung lyrics." if document.instrumental else document.plain
+
+    def lyrics_document(self, track: Track | None = None, refresh: bool = False) -> LyricsDocument | None:
+        if track is None:
+            data = self.now().get("track")
+            if data:
+                track = Track.from_dict(data)
+        if track is None:
             raise MyneError("Nothing is playing. Start a song with myne play first.")
-        track = Track.from_dict(data)
-        return self.registry.provider(track.provider).lyrics(track)
+        return self._lyrics.get(track, refresh=refresh)
+
+    def visualizer(self, enabled: bool = True) -> dict[str, Any]:
+        try:
+            return self._live_player.request("visualizer", enabled=enabled)
+        except PlaybackError as exc:
+            return {"available": False, "rms": [], "peak": [], "error": str(exc)}
+
+    def audio_levels(self) -> dict[str, Any]:
+        try:
+            return self._live_player.request("levels")
+        except PlaybackError as exc:
+            return {
+                "available": False,
+                "rms": [],
+                "peak": [],
+                "playing": False,
+                "paused": False,
+                "error": str(exc),
+            }
 
     def mix(self, mood: str, limit: int = 20, ai: bool = False, strategy: str | None = None) -> list[Track]:
         if ai and strategy:

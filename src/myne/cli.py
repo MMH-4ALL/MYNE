@@ -5,6 +5,8 @@ import os
 import shutil
 import sqlite3
 import sys
+import time
+from collections import deque
 from dataclasses import asdict
 from functools import wraps
 from typing import Any, Callable, ParamSpec, TypeVar
@@ -12,6 +14,7 @@ from typing import Any, Callable, ParamSpec, TypeVar
 import questionary
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
@@ -262,10 +265,98 @@ def now(ctx: typer.Context) -> None:
 
 @app.command()
 @handled
-def lyrics(ctx: typer.Context) -> None:
-    """Show available lyrics for the current song."""
-    text = application(ctx).lyrics()
-    emit(ctx, {"lyrics": text}, text or "No lyrics available for this track.")
+def lyrics(
+    ctx: typer.Context,
+    query: str | None = typer.Argument(None, help="Optional song query; defaults to the playing song."),
+    lrc: bool = typer.Option(False, "--lrc", help="Print timestamped lyrics when available."),
+    refresh: bool = typer.Option(False, "--refresh", help="Bypass the local lyrics cache."),
+) -> None:
+    """Get lyrics from LRCLIB or the music provider, with optional LRC timestamps."""
+    service = application(ctx)
+    document = service.lyrics_document(service.resolve(query) if query else None, refresh=refresh)
+    if document is None:
+        emit(ctx, {"lyrics": None}, "No lyrics found for this track. Try myne lyrics --refresh later.")
+        return
+    if ctx.obj.get("json"):
+        emit(ctx, document.to_dict())
+        return
+    if document.instrumental:
+        console.print("Instrumental · no sung lyrics.")
+    elif lrc and document.synced:
+        for line in document.synced:
+            minutes, seconds = divmod(line.time, 60)
+            console.print(Text(f"[{int(minutes):02}:{seconds:05.2f}]{line.text}"))
+    else:
+        console.print(Text(document.plain))
+        if lrc:
+            console.print("Timed lyrics are unavailable; showing plain lyrics.", style="dim")
+    console.print(Text(f"Source · {document.source}", style="dim"))
+
+
+def _audio_frame(levels: dict[str, Any], history: deque[float], width: int = 42) -> Text:
+    frame = Text("MYNE CLI · LIVE AUDIO\n", style="bold cyan")
+    if levels.get("error"):
+        frame.append(str(levels["error"]) + "\n", style="yellow")
+    if not levels.get("available"):
+        state = "Paused" if levels.get("paused") else "Waiting for audio measurements"
+        frame.append(state + "\n", style="dim")
+        history.clear()
+    else:
+        rms = levels.get("rms") or []
+        peak = levels.get("peak") or []
+        for index, value in enumerate(rms[:2]):
+            fill = round(max(0, min(1, float(value))) * width)
+            label = "M" if len(rms) == 1 else ("L" if index == 0 else "R")
+            frame.append(f"{label}  ", style="bold")
+            frame.append("█" * fill, style="cyan")
+            frame.append("░" * (width - fill), style="grey35")
+            peak_value = float(peak[index]) if index < len(peak) else float(value)
+            frame.append(f"  {max(-60.0, min(0.0, peak_value * 60 - 60)):5.1f} dBFS peak\n", style="dim")
+        if rms:
+            history.append(sum(float(value) for value in rms) / len(rms))
+        blocks = "▁▂▃▄▅▆▇█"
+        frame.append("AMPLITUDE HISTORY\n", style="dim")
+        frame.append("".join(blocks[min(7, max(0, int(value * 7)))] for value in history), style="cyan")
+        frame.append("\n")
+    frame.append("Actual sample levels · -60 to 0 dBFS · Ctrl+C closes this view", style="dim")
+    return frame
+
+
+@app.command("visualize")
+@handled
+def visualize(
+    ctx: typer.Context,
+    seconds: float | None = typer.Option(
+        None, "--seconds", min=0.1, max=3600, help="Stop after this many seconds."
+    ),
+    fps: int = typer.Option(10, "--fps", min=1, max=20),
+    off: bool = typer.Option(False, "--off", help="Disable the audio analysis filter."),
+) -> None:
+    """Show a live stereo visualizer for the playing music."""
+    service = application(ctx)
+    state = service.visualizer(not off)
+    if off:
+        emit(ctx, state, "Visualizer disabled.")
+        return
+    if state.get("error"):
+        raise MyneError(str(state["error"]))
+    if not state.get("track_id"):
+        service.visualizer(False)
+        raise MyneError("Start a song with myne play, then run myne visualize.")
+    history: deque[float] = deque(maxlen=42)
+    try:
+        if ctx.obj.get("json"):
+            emit(ctx, service.audio_levels())
+            return
+        started = time.monotonic()
+        with Live(console=console, refresh_per_second=fps, auto_refresh=False) as live:
+            while seconds is None or time.monotonic() - started < seconds:
+                live.update(_audio_frame(service.audio_levels(), history), refresh=True)
+                time.sleep(1 / fps)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        service.visualizer(False)
 
 
 @app.command()

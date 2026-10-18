@@ -65,6 +65,33 @@ continues until `myne shutdown`, logout or system shutdown. Closing the TUI does
 not stop music. The service is a per-user process, not a system service or
 login-startup installation.
 
+## Lyrics and visualizer
+
+```sh
+myne play "Linkin Park Numb"
+myne ui                   # live meters; l toggles lyrics, v toggles the visualizer
+myne lyrics               # plain lyrics with their source
+myne lyrics --lrc          # timestamped LRC when available
+myne lyrics --refresh      # bypass the cache and look up this track again
+myne visualize            # standalone audio meter; Ctrl+C closes the view
+```
+
+LRCLIB supplies plain/timed lyrics without a key. Myne sends the current song's
+title, artist, album and duration to its public API, validates the match and
+caches successful lookups locally for seven days. A missing match falls back to
+the music provider. Missing lyrics are cached briefly; `--refresh` bypasses the
+cache. Songs without available lyrics show an explicit empty/instrumental state.
+The lyrics panel follows playback time, including backward seeking and pausing.
+
+The visualizer uses mpv's FFmpeg `astats` audio filter. Standard Debian/Fedora/
+Homebrew mpv packages generally provide it. There is no microphone capture,
+audio upload, extra player process or full-song download. Meters show decoded
+sample levels before system output mixing. If analysis is unavailable, audio
+continues normally and the UI explains why the meters are quiet.
+
+After upgrading from Myne 0.1, restart the existing player with `myne shutdown`,
+then `myne play`. UI telemetry uses the updated local IPC protocol.
+
 ## Optional YouTube authentication
 
 Anonymous search and playback are attempted by default. Account/region checks

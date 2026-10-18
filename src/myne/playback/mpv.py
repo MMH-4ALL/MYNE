@@ -17,6 +17,10 @@ from typing import Any
 
 from myne.errors import PlaybackError
 from myne.models import Stream
+from myne.visualizer import AudioLevels, empty_levels, normalize_levels
+
+_LEVEL_FILTER = "@myne_levels:lavfi=[astats=metadata=1:reset=1]"
+_LEVEL_ERROR = "Audio levels unavailable. This mpv build needs FFmpeg's astats audio filter."
 
 
 def private_directory(path: Path) -> None:
@@ -50,6 +54,10 @@ class MpvEngine:
         self._request_id = 0
         self._entry_id: int | None = None
         self._lock = threading.RLock()
+        self._visualizer_enabled = False
+        self._visualizer_attached = False
+        self._visualizer_loading = False
+        self._visualizer_error: str | None = None
 
     def start(self) -> None:
         if os.name == "nt":
@@ -107,6 +115,7 @@ class MpvEngine:
                         self._socket = connection
                         self.socket_path.chmod(0o600)
                         self.command("get_property", "mpv-version")
+                        self._attach_visualizer()
                         return
                 raise PlaybackError("mpv did not open its IPC socket in time.")
             except (OSError, PlaybackError) as exc:
@@ -158,7 +167,7 @@ class MpvEngine:
             while True:
                 message = self._message(deadline)
                 if "event" in message:
-                    self._events.append(message)
+                    self._record_event(message)
                 if message.get("request_id") != request_id:
                     continue
                 error = message.get("error", "success")
@@ -168,13 +177,27 @@ class MpvEngine:
                     raise PlaybackError(f"mpv command failed: {error}")
                 return message.get("data")
 
+    def _record_event(self, event: dict[str, Any]) -> None:
+        self._events.append(event)
+        name = event.get("event")
+        if name == "start-file":
+            self._visualizer_loading = True
+        elif name == "file-loaded":
+            self._visualizer_loading = False
+        elif name == "end-file" and (
+            self._entry_id is None
+            or event.get("playlist_entry_id") is None
+            or event["playlist_entry_id"] == self._entry_id
+        ):
+            self._visualizer_loading = True
+
     def poll_events(self) -> list[dict[str, Any]]:
         with self._lock:
             if self._socket is not None:
                 while b"\n" in self._buffer or select.select([self._socket], [], [], 0)[0]:
                     message = self._message(time.monotonic() + self.timeout)
                     if "event" in message:
-                        self._events.append(message)
+                        self._record_event(message)
             events = list(self._events)
             self._events.clear()
             return [
@@ -194,6 +217,7 @@ class MpvEngine:
         headers = [f"{name}: {value}" for name, value in stream.headers.items()]
         self.command("set_property", "http-header-fields", headers)
         self.command("set_property", "pause", False)
+        self._visualizer_loading = True
         self.command("loadfile", stream.url, "replace")
         self._entry_id = self.command("get_property", "playlist/0/id", allow_unavailable=True)
 
@@ -212,6 +236,58 @@ class MpvEngine:
             self.command("stop")
             self.poll_events()
             self._entry_id = None
+        self._visualizer_loading = False
+
+    def _attach_visualizer(self) -> None:
+        if not self._visualizer_enabled or self._visualizer_attached or self._socket is None:
+            return
+        try:
+            self.command("af", "add", _LEVEL_FILTER)
+        except PlaybackError:
+            # Audio measurement is optional: an older or minimal mpv build
+            # must still be able to stream and play music normally.
+            self._visualizer_enabled = False
+            self._visualizer_error = _LEVEL_ERROR
+            return
+        self._visualizer_attached = True
+
+    def enable_visualizer(self, enabled: bool) -> None:
+        """Lazily add/remove the measuring filter without starting playback."""
+        with self._lock:
+            self._visualizer_enabled = enabled
+            self._visualizer_error = None
+            if enabled:
+                self._attach_visualizer()
+            elif self._visualizer_attached and self._socket is not None:
+                try:
+                    self.command("af", "remove", "@myne_levels")
+                except PlaybackError:
+                    # A removed track/filter or a disconnected player does
+                    # not turn disabling a cosmetic feature into an error.
+                    pass
+                self._visualizer_attached = False
+
+    def audio_levels(self) -> AudioLevels:
+        """Return sample-derived RMS/peak measurements, or a quiet state.
+
+        Never retain the last frame: a paused, buffering, stopped or changing
+        track clears the display immediately instead of showing stale audio.
+        """
+        with self._lock:
+            if not self._visualizer_enabled or self._socket is None:
+                return empty_levels(self._visualizer_error)
+            self._attach_visualizer()
+            if not self._visualizer_attached:
+                return empty_levels(self._visualizer_error)
+            try:
+                paused = self.command("get_property", "pause", allow_unavailable=True)
+                idle = self.command("get_property", "core-idle", allow_unavailable=True)
+                if paused is not False or idle is not False or self._visualizer_loading:
+                    return empty_levels()
+                metadata = self.command("get_property", "af-metadata/myne_levels", allow_unavailable=True)
+            except PlaybackError:
+                return empty_levels("Audio levels unavailable. Check the mpv connection.")
+            return normalize_levels(metadata)
 
     def snapshot(self) -> dict[str, Any]:
         if self._socket is None:
@@ -255,4 +331,6 @@ class MpvEngine:
             self._buffer = b""
             self._events.clear()
             self._entry_id = None
+            self._visualizer_attached = False
+            self._visualizer_loading = False
             self.socket_path.unlink(missing_ok=True)

@@ -217,10 +217,15 @@ class PlayerService:
                 )
 
     def now(self) -> dict[str, Any]:
-        state: dict[str, Any] = {"position": 0.0, "duration": None, "paused": False, "volume": self._volume}
+        state: dict[str, Any] = {
+            "position": 0.0,
+            "duration": None,
+            "paused": False,
+            "playing": False,
+            "volume": self._volume,
+        }
         if self._active is not None:
             state.update(self.engine.snapshot())
-        state.pop("playing", None)
         state.update(
             track=self._active.to_dict() if self._active else None,
             radio=self._radio_seed is not None,
@@ -255,9 +260,37 @@ class PlayerService:
         with self.lock:
             self._account()
             if action == "ping":
-                return {"version": 1}
+                return {"version": 2}
             if action == "now":
                 return self.now()
+            if action in {"visualizer", "levels"}:
+                if action == "visualizer":
+                    enabled = payload.get("enabled", True)
+                    if not isinstance(enabled, bool):
+                        raise PlaybackError("Visualizer enabled must be true or false.")
+                    self.engine.enable_visualizer(enabled)
+                state = self.now()
+                try:
+                    levels = (
+                        self.engine.audio_levels()
+                        if self._active
+                        else {"available": False, "rms": [], "peak": [], "error": None}
+                    )
+                except (MyneError, OSError):
+                    levels = {
+                        "available": False,
+                        "rms": [],
+                        "peak": [],
+                        "error": "Audio measurements are temporarily unavailable.",
+                    }
+                return {
+                    **levels,
+                    "track_id": self._active.id if self._active else None,
+                    "provider": self._active.provider if self._active else None,
+                    "paused": state.get("paused", False),
+                    "playing": state.get("playing", False),
+                    "position": state.get("position", 0.0),
+                }
             if action in {"play", "enqueue"}:
                 tracks = self._tracks(payload.get("tracks"))
                 if not tracks:

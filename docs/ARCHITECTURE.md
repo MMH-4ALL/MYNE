@@ -20,6 +20,8 @@ and can be replaced with fakes without contacting external services.
    restart recovery. Independent CLI commands share this process.
 6. **Experience and extensions:** Rich/Questionary command presentation, Textual
    full-screen UI, AI/mood mix strategies and explicit plugin activation.
+   Lyrics services parse LRC timing and combine LRCLIB with provider fallback;
+   a labeled mpv FFmpeg filter exposes measured RMS/peak audio levels over IPC.
 7. **Verification:** offline provider contract tests, transactional persistence,
    fake-mpv IPC, service lifecycle tests and headless TUI interaction tests.
 
@@ -29,6 +31,8 @@ and can be replaced with fakes without contacting external services.
 | --- | --- | --- |
 | Domain | `models`, `errors`, `providers.base` | Stable data and provider contract |
 | Use cases | `service`, `mix` | Resolve, search, play, queue, mix and browse |
+| Lyrics | `lyrics` | Bounded API lookup/cache, recording validation, LRC parsing and synchronization |
+| Audio telemetry | `visualizer`, `playback.mpv` | Normalize real sample levels and expose an optional measuring filter |
 | Composition | `container`, `config`, `plugins` | Inject configured providers and extensions |
 | Adapters | `providers.youtube`, `providers.local`, `storage` | Remote metadata, stream resolution, files and SQLite |
 | Playback | `playback.mpv`, `playback.daemon`, `playback.client` | Audio process ownership and local IPC |
@@ -102,6 +106,21 @@ tracks already pending or in its bounded recent history. Exhausted/failed
 recommendations stop refill with an actionable status. Consecutive playback
 failures are bounded and remaining tracks persist.
 
+Live telemetry uses a separate two-second client timeout so polling cannot keep
+an interface worker blocked indefinitely. A `visualizer` request enables or
+removes the optional labeled `astats` audio filter; `levels` reads its metadata
+and adds current song identity, position and pause/playing flags. Unsupported
+analysis is isolated from normal playback. Values are normalized display
+coordinates from -60 to 0 dBFS, not FFT frequency bins or copied audio samples.
+
+The TUI fetches lyrics in a worker on song changes, rejects results for stale
+song identities, and selects a line by its timestamp on every position change.
+It interpolates the playback clock briefly between telemetry frames, stopping
+when mpv reports paused/buffering. LRCLIB queries are qualified by artist/title
+and checked against available duration; caches bound both memory and disk use.
+No network lookup runs in the player's audio loop. Lyrics are plain data and
+provider markup/control codes are not executed by the terminal.
+
 ## Extensibility
 
 A provider implements metadata methods and stream resolution. Optional radio
@@ -114,5 +133,5 @@ sandbox for untrusted Python code.
 
 Future Spotify support should distinguish metadata import from playback rights.
 Presence/scrobbling/sync need explicit opt-in boundaries and credentials. Audio
-visualization will need an mpv/libmpv audio-data interface; it is outside this
-release's transport contract.
+frequency-spectrum visualization would need frequency-bin telemetry in addition
+to this release's measured RMS/peak levels.

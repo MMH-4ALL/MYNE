@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import time
+from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -17,13 +19,14 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.events import DescendantFocus
-from textual.screen import ModalScreen
+from textual.events import DescendantFocus, Resize
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, DataTable, Footer, Input, ProgressBar, Static
 
 from myne.models import Track
 
 if TYPE_CHECKING:
+    from myne.lyrics import LyricsDocument
     from myne.service import Application
 
 
@@ -65,6 +68,28 @@ def _stats_text(stats: dict[str, Any]) -> str:
                 else "Your listening history will appear here."
             )
     return "\n".join(lines)
+
+
+def _level(value: object) -> float:
+    """Keep malformed or non-finite audio telemetry out of the renderer."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return 0.0
+    return max(0.0, min(1.0, number)) if math.isfinite(number) else 0.0
+
+
+def _meter(rms: float, peak: float, width: int) -> Text:
+    """Draw real RMS with a peak marker on a useful -60 to 0 dB scale."""
+    # The daemon already maps -60..0 dBFS to 0..1; never logarithmize it twice.
+    filled = round(_level(rms) * width)
+    peak_cell = min(width - 1, round(_level(peak) * (width - 1)))
+    result = Text()
+    for index in range(width):
+        character = "│" if peak > 0 and index == peak_cell else "█" if index < filled else "░"
+        color = "#ffa990" if index > width * 0.9 else "#62d6bf"
+        result.append(character, style=color if character != "░" else "#29404e")
+    return result
 
 
 class DetailScreen(ModalScreen[None]):
@@ -117,12 +142,20 @@ class MyneApp(App[None]):
     .pane { border: round #29404e; padding: 0; }
     #results-pane { width: 2fr; min-width: 32; margin-right: 1; }
     #queue-pane { width: 1fr; min-width: 23; }
+    #lyrics-pane { width: 2fr; min-width: 29; margin-left: 1; }
+    #lyrics-scroll { height: 1fr; padding: 0 1; }
+    #lyrics-body { height: auto; min-height: 1; }
+    #lyrics-source { height: 1; color: #94a9b5; padding: 0 1; text-overflow: ellipsis; }
+    #library.compact-lyrics #results-pane, #library.compact-lyrics #queue-pane { display: none; }
+    #library.compact-lyrics #lyrics-pane { width: 1fr; margin-left: 0; }
     DataTable { height: 1fr; background: #0b1219; }
     DataTable > .datatable--header { background: #172630; color: #94a9b5; }
     DataTable:focus > .datatable--cursor { background: #62d6bf; color: #0b1219; }
     DataTable > .datatable--cursor { background: #29404e; }
     .empty { height: 1; color: #94a9b5; padding-left: 1; }
-    #player { height: 7; margin: 0 1; border: round #29404e; padding: 0 1; }
+    #player { height: 10; margin: 0 1; border: round #29404e; padding: 0 1; }
+    #player.no-visualizer { height: 7; }
+    #audio-meter { height: 3; color: #94a9b5; }
     #now { height: 1; text-style: bold; text-overflow: ellipsis; }
     #progress-row { height: 1; }
     #progress { width: 1fr; height: 1; padding: 0 1 0 0; }
@@ -134,11 +167,12 @@ class MyneApp(App[None]):
     """
     BINDINGS = [
         Binding("ctrl+f", "search_focus", "Search", priority=True),
-        Binding("a", "enqueue", "Add"),
-        Binding("p", "play", "Play"),
+        Binding("a", "enqueue", "Add", show=False),
+        Binding("p", "play", "Play", show=False),
         Binding("space", "toggle_pause", "Pause"),
-        Binding("n", "next", "Next"),
-        Binding("l", "lyrics", "Lyrics", show=False),
+        Binding("n", "next", "Next", show=False),
+        Binding("l", "lyrics", "Lyrics"),
+        Binding("v", "visualizer", "Visualizer"),
         Binding("s", "stats", "Stats", show=False),
         Binding("?", "help", "Help"),
         Binding("ctrl+q", "quit", "Exit", priority=True),
@@ -156,6 +190,26 @@ class MyneApp(App[None]):
         self._selected_queue = 0
         self._selection_source = "results"
         self._last_player_error: str | None = None
+        self._snapshot_at = time.monotonic()
+        self._visualizer_enabled = True
+        self._visualizer_connected = False
+        self._levels_refreshing = False
+        self._visualizer_configuring = False
+        self._levels: dict[str, Any] = {}
+        self._audio_history: deque[float] = deque(maxlen=100)
+        self._lyrics_visible = False
+        self._lyrics_user_toggled = False
+        self._lyrics_key: tuple[str, str] | None = None
+        self._lyrics_document: LyricsDocument | None = None
+        self._lyrics_pending: Track | None = None
+        self._lyrics_fetching = False
+        self._lyrics_error: str | None = None
+        self._lyrics_loading = False
+        self._lyric_index = -2
+
+    @property
+    def _main_screen(self) -> Screen[Any]:
+        return self.screen_stack[0]
 
     def compose(self) -> ComposeResult:
         yield Static("MYNE CLI\nMy Music. My Queue. My Experience.", id="brand", markup=False)
@@ -170,11 +224,16 @@ class MyneApp(App[None]):
             with Vertical(id="queue-pane", classes="pane"):
                 yield DataTable(id="queue", cursor_type="row")
                 yield Static("Queue is empty.", id="queue-empty", classes="empty", markup=False)
+            with Vertical(id="lyrics-pane", classes="pane"):
+                with VerticalScroll(id="lyrics-scroll", can_focus=True):
+                    yield Static("Play a track to load lyrics.", id="lyrics-body", markup=False)
+                yield Static("l · Show / hide lyrics", id="lyrics-source", markup=False)
         with Vertical(id="player"):
             yield Static("Nothing playing · search to begin", id="now", markup=False)
             with Horizontal(id="progress-row"):
                 yield ProgressBar(total=100, show_eta=False, show_percentage=False, id="progress")
                 yield Static("0:00 / —:——", id="time", markup=False)
+            yield Static("AUDIO LEVELS · waiting for playback…", id="audio-meter", markup=False)
             with Horizontal(id="transport"):
                 yield Button("▶ Play", id="play")
                 yield Button("+ Queue", id="add")
@@ -183,17 +242,42 @@ class MyneApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#results-pane").border_title = "DISCOVER"
-        self.query_one("#queue-pane").border_title = "MY QUEUE · 0"
-        self.query_one("#player").border_title = "NOW PLAYING"
-        self.query_one("#results", DataTable).add_columns("Title", "Artist", "Time")
-        self.query_one("#queue", DataTable).add_column("Up next")
-        self.query_one("#search", Input).focus()
+        self._main_screen.query_one("#results-pane").border_title = "DISCOVER"
+        self._main_screen.query_one("#queue-pane").border_title = "MY QUEUE · 0"
+        self._main_screen.query_one("#player").border_title = "NOW PLAYING"
+        self._main_screen.query_one("#lyrics-pane").border_title = "LYRICS · l"
+        self._main_screen.query_one("#results", DataTable).add_columns("Title", "Artist", "Time")
+        self._main_screen.query_one("#queue", DataTable).add_column("Up next")
+        self._main_screen.query_one("#search", Input).focus()
         self.refresh_playback()
         self.set_interval(1.0, self.refresh_playback)
+        self.set_interval(0.12, self.sample_audio)
+        self.set_interval(0.1, self.tick_playback)
+        self._layout_lyrics()
+        self.configure_visualizer()
+
+    def on_resize(self, event: Resize) -> None:
+        if self.screen_stack and self._main_screen.query("#lyrics-pane"):
+            self._layout_lyrics()
+
+    async def on_unmount(self) -> None:
+        if self._visualizer_connected:
+            try:
+                await asyncio.wait_for(asyncio.to_thread(self.service.visualizer, False), timeout=1.0)
+            except Exception:
+                pass
+
+    def _layout_lyrics(self) -> None:
+        wide = self.size.width >= 110
+        if not self._lyrics_user_toggled:
+            self._lyrics_visible = wide
+        self._main_screen.query_one("#lyrics-pane").display = self._lyrics_visible
+        self._main_screen.query_one("#library").set_class(self._lyrics_visible and not wide, "compact-lyrics")
+        if self._lyrics_visible:
+            self.call_after_refresh(self._render_lyrics, force=True)
 
     def _status(self, message: str, *, error: bool = False) -> None:
-        widget = self.query_one("#status", Static)
+        widget = self._main_screen.query_one("#status", Static)
         widget.update(_plain(message))
         widget.set_class(error, "error")
 
@@ -235,7 +319,7 @@ class MyneApp(App[None]):
         self.results = list(tracks)
         self._selected_result = 0
         self._selection_source = "results"
-        table = self.query_one("#results", DataTable)
+        table = self._main_screen.query_one("#results", DataTable)
         table.clear()
         for index, track in enumerate(self.results):
             table.add_row(
@@ -245,11 +329,11 @@ class MyneApp(App[None]):
                 key=str(index),
             )
         # Border titles use Rich markup; untrusted moods are kept out of them.
-        self.query_one("#results-pane").border_title = (
+        self._main_screen.query_one("#results-pane").border_title = (
             "SMART MIX" if heading.startswith("MIX") else "DISCOVER"
         )
-        self.query_one("#results-empty").display = not bool(self.results)
-        self.query_one("#results-empty", Static).update("No tracks found. Try another search.")
+        self._main_screen.query_one("#results-empty").display = not bool(self.results)
+        self._main_screen.query_one("#results-empty", Static).update("No tracks found. Try another search.")
         self._status(
             f"{len(self.results)} tracks · Enter plays · a adds to queue"
             if self.results
@@ -292,7 +376,7 @@ class MyneApp(App[None]):
         return []
 
     def action_search_focus(self) -> None:
-        self.query_one("#search", Input).focus()
+        self._main_screen.query_one("#search", Input).focus()
 
     def action_play(self) -> None:
         tracks = self._selected()
@@ -351,7 +435,7 @@ class MyneApp(App[None]):
             self._show_playback(snapshot)
             tracks = list(queue)
             if tracks != self.queued:
-                table = self.query_one("#queue", DataTable)
+                table = self._main_screen.query_one("#queue", DataTable)
                 self.queued = tracks
                 table.clear()
                 for index, track in enumerate(tracks):
@@ -362,8 +446,8 @@ class MyneApp(App[None]):
                 self._selected_queue = min(self._selected_queue, max(0, len(tracks) - 1))
                 if tracks:
                     table.move_cursor(row=self._selected_queue)
-            self.query_one("#queue-empty").display = not bool(tracks)
-            self.query_one("#queue-pane").border_title = f"MY QUEUE · {len(tracks)}"
+            self._main_screen.query_one("#queue-empty").display = not bool(tracks)
+            self._main_screen.query_one("#queue-pane").border_title = f"MY QUEUE · {len(tracks)}"
         except Exception as exc:
             self._status(f"Playback unavailable: {exc}", error=True)
         finally:
@@ -373,29 +457,280 @@ class MyneApp(App[None]):
         return self.service.now(), self.service.queue()
 
     def _show_playback(self, snapshot: dict[str, Any]) -> None:
+        self._snapshot = snapshot
+        self._snapshot_at = time.monotonic()
         track = snapshot.get("track")
         if track:
             artists = ", ".join(track.get("artists") or ())
             state = "Ⅱ" if snapshot.get("paused") else "▶"
             radio = " · RADIO" if snapshot.get("radio") else ""
-            self.query_one("#now", Static).update(
+            self._main_screen.query_one("#now", Static).update(
                 _plain(f"{state} {track.get('title', 'Unknown track')} · {artists}{radio}")
             )
         else:
-            self.query_one("#now", Static).update("Nothing playing · search to begin")
-        position = float(snapshot.get("position") or 0)
+            self._main_screen.query_one("#now", Static).update("Nothing playing · search to begin")
+        self._sync_lyrics_track(track)
+        self.tick_playback()
+        self._main_screen.query_one("#pause", Button).label = (
+            "▶ Resume" if snapshot.get("paused") else "Ⅱ Pause"
+        )
+        error = snapshot.get("error")
+        if error and error != self._last_player_error:
+            self._status(str(error), error=True)
+        self._last_player_error = error
+
+    def _playback_position(self) -> float:
+        position = float(self._snapshot.get("position") or 0)
+        if not math.isfinite(position):
+            return 0.0
+        if (
+            self._snapshot.get("track")
+            and not self._snapshot.get("paused")
+            and self._snapshot.get("playing", True)
+        ):
+            # Never extrapolate past a lost daemon connection indefinitely.
+            position += min(1.5, max(0.0, time.monotonic() - self._snapshot_at))
+        return max(0.0, position)
+
+    def tick_playback(self) -> None:
+        """Keep the cursor smooth; the next mpv sample corrects seeks and stalls."""
+        if not self._main_screen.query("#time"):
+            return
+        snapshot = self._snapshot
+        position = self._playback_position()
         duration = snapshot.get("duration")
         duration = float(duration) if duration else None
         if duration and (not math.isfinite(duration) or duration <= 0):
             duration = None
         progress = max(0.0, min(100.0, position / duration * 100)) if duration else 0
-        self.query_one("#progress", ProgressBar).update(total=100, progress=progress)
-        self.query_one("#time", Static).update(f"{_clock(position)} / {_clock(duration)}")
-        self.query_one("#pause", Button).label = "▶ Resume" if snapshot.get("paused") else "Ⅱ Pause"
-        error = snapshot.get("error")
-        if error and error != self._last_player_error:
-            self._status(str(error), error=True)
-        self._last_player_error = error
+        self._main_screen.query_one("#progress", ProgressBar).update(total=100, progress=progress)
+        self._main_screen.query_one("#time", Static).update(f"{_clock(position)} / {_clock(duration)}")
+        self._render_lyrics(position)
+        self._render_audio()
+
+    @work(group="visualizer-config", exit_on_error=False)
+    async def configure_visualizer(self) -> None:
+        if self._visualizer_configuring:
+            return
+        self._visualizer_configuring = True
+        try:
+            while True:
+                requested = self._visualizer_enabled
+                result = await asyncio.to_thread(self.service.visualizer, requested)
+                self._visualizer_connected = bool(requested and not result.get("error"))
+                if requested == self._visualizer_enabled:
+                    if result.get("error"):
+                        self._levels = {"available": False, "error": str(result["error"])}
+                    break
+        except Exception as exc:
+            self._visualizer_connected = False
+            self._levels = {"available": False, "error": str(exc)}
+        finally:
+            self._visualizer_configuring = False
+            self._render_audio()
+
+    def action_visualizer(self) -> None:
+        self._visualizer_enabled = not self._visualizer_enabled
+        self._audio_history.clear()
+        self._main_screen.query_one("#audio-meter").display = self._visualizer_enabled
+        self._main_screen.query_one("#player").set_class(not self._visualizer_enabled, "no-visualizer")
+        self.configure_visualizer()
+        self._status(
+            "Audio visualizer on · actual mpv RMS / peak"
+            if self._visualizer_enabled
+            else "Audio visualizer off · press v to show"
+        )
+
+    @work(group="audio-levels", exit_on_error=False)
+    async def sample_audio(self) -> None:
+        """A single cheap daemon request; slow IPC never accumulates threads."""
+        if not self._visualizer_enabled or self._levels_refreshing or not self._snapshot.get("track"):
+            return
+        self._levels_refreshing = True
+        requested_track = self._lyrics_key
+        try:
+            levels = await asyncio.to_thread(self.service.audio_levels)
+            if requested_track != self._lyrics_key:
+                return
+            if (
+                levels.get("track_id") is not None
+                and (levels.get("provider"), levels.get("track_id")) != requested_track
+            ):
+                self._levels = {}
+                return
+            self._levels = levels
+            track = self._snapshot.get("track") or {}
+            if levels.get("track_id") == track.get("id") and levels.get("provider") == track.get("provider"):
+                if levels.get("position") is not None:
+                    self._snapshot["position"] = levels["position"]
+                    self._snapshot_at = time.monotonic()
+                self._snapshot["paused"] = levels.get("paused", self._snapshot.get("paused"))
+                self._snapshot["playing"] = levels.get("playing", self._snapshot.get("playing", True))
+            if (
+                levels.get("available")
+                and not self._snapshot.get("paused")
+                and self._snapshot.get("playing", True)
+            ):
+                rms = levels.get("rms") or []
+                self._audio_history.append(max((_level(value) for value in rms), default=0.0))
+        except Exception as exc:
+            self._levels = {"available": False, "error": str(exc)}
+        finally:
+            self._levels_refreshing = False
+            self._render_audio()
+
+    def _render_audio(self) -> None:
+        if not self._main_screen.query("#audio-meter"):
+            return
+        meter = self._main_screen.query_one("#audio-meter", Static)
+        if not self._visualizer_enabled:
+            return
+        if not self._snapshot.get("track"):
+            meter.update(
+                "AUDIO LEVELS · waiting for playback…\nStereo RMS / peak from mpv · v toggles visualizer"
+            )
+            return
+        if self._snapshot.get("paused"):
+            meter.update("AUDIO LEVELS · paused\nResume playback to continue the live meter.")
+            return
+        if not self._levels.get("available"):
+            message = self._levels.get("error")
+            meter.update(
+                _plain(f"AUDIO LEVELS · {'unavailable' if message else 'connecting…'}")
+                + (f"\n{_plain(message)}" if message else "\nWaiting for audio samples from mpv.")
+            )
+            return
+        if not self._snapshot.get("playing", True):
+            meter.update("AUDIO LEVELS · buffering\nWaiting for the audio stream to continue.")
+            return
+        rms = list(self._levels.get("rms") or [0.0])
+        peaks = list(self._levels.get("peak") or rms)
+        width = max(8, min(48, meter.size.width - 17))
+        rendered = Text()
+        for channel in range(min(2, len(rms))):
+            value = _level(rms[channel])
+            peak = _level(peaks[min(channel, len(peaks) - 1)])
+            rendered.append("L " if channel == 0 else "R ", style="#94a9b5")
+            rendered.append_text(_meter(value, peak, width))
+            rendered.append(f" {value * 60 - 60:5.1f} dBFS" if value > 0 else " ≤−60 dBFS")
+            rendered.append("\n")
+        if len(rms) == 1:
+            rendered.append("MONO · actual mpv RMS / peak\n", style="#94a9b5")
+        symbols = "▁▂▃▄▅▆▇█"
+        history = list(self._audio_history)[-max(1, meter.size.width - 15) :]
+        rendered.append("RMS HISTORY  ", style="#94a9b5")
+        rendered.append(
+            "".join(symbols[min(7, round(_level(value) * 7))] for value in history), style="#62d6bf"
+        )
+        meter.update(rendered)
+
+    def _sync_lyrics_track(self, track_data: dict[str, Any] | None) -> None:
+        track = Track.from_dict(track_data) if track_data else None
+        key = (track.provider, track.id) if track else None
+        if key == self._lyrics_key:
+            return
+        self._lyrics_key = key
+        self._lyrics_document = None
+        self._lyrics_error = None
+        self._lyrics_loading = track is not None
+        self._lyric_index = -2
+        self._lyrics_pending = track
+        self._audio_history.clear()
+        self._levels = {}
+        self._main_screen.query_one("#lyrics-scroll", VerticalScroll).scroll_to(y=0, animate=False)
+        self._render_lyrics(force=True)
+        if track:
+            self.fetch_lyrics()
+            if self._visualizer_enabled and not self._visualizer_connected:
+                self.configure_visualizer()
+
+    @work(group="lyrics-fetch", exit_on_error=False)
+    async def fetch_lyrics(self) -> None:
+        """One provider request at a time; only the newest track can publish."""
+        if self._lyrics_fetching:
+            return
+        self._lyrics_fetching = True
+        try:
+            while self._lyrics_pending is not None:
+                track = self._lyrics_pending
+                self._lyrics_pending = None
+                key = (track.provider, track.id)
+                document = None
+                error = None
+                try:
+                    document = await asyncio.to_thread(self.service.lyrics_document, track)
+                except Exception as exc:
+                    error = str(exc)
+                if self._lyrics_key == key:
+                    self._lyrics_document = document
+                    self._lyrics_loading = False
+                    self._lyrics_error = error
+                    self._render_lyrics(force=True)
+        finally:
+            self._lyrics_fetching = False
+
+    def _render_lyrics(self, position: float | None = None, *, force: bool = False) -> None:
+        if not self._main_screen.query("#lyrics-body"):
+            return
+        document = self._lyrics_document
+        current = (
+            document.current_index(position if position is not None else self._playback_position())
+            if document and document.synced
+            else None
+        )
+        index = current if current is not None else -1
+        if not force and index == self._lyric_index:
+            return
+        self._lyric_index = index
+        body = self._main_screen.query_one("#lyrics-body", Static)
+        source = self._main_screen.query_one("#lyrics-source", Static)
+        if self._lyrics_loading:
+            body.update("Finding lyrics for this track…")
+            source.update("Lyrics · loading")
+        elif self._lyrics_error:
+            body.update(f"Lyrics unavailable right now.\n\n{_plain(self._lyrics_error)}")
+            source.update("l · Hide lyrics · retry on next track")
+        elif document is None:
+            body.update(
+                "No lyrics found for this track." if self._lyrics_key else "Play a track to load lyrics."
+            )
+            source.update("l · Show / hide lyrics")
+        elif document.instrumental:
+            body.update("♫  Instrumental\n\nThis track has no sung lyrics.")
+            source.update(_plain(document.source))
+        elif document.synced:
+            text = Text()
+            for line_index, line in enumerate(document.synced):
+                text.append("› " if line_index == index else "  ", style="#62d6bf")
+                text.append(
+                    _plain(line.text) or "♪",
+                    style=(
+                        "bold #62d6bf"
+                        if line_index == index
+                        else "#e7eef3"
+                        if line_index > index
+                        else "#94a9b5"
+                    ),
+                )
+                text.append("\n")
+            body.update(text)
+            source.update(_plain(f"{document.source} · synced · l hides"))
+            if not self._lyrics_visible:
+                return
+            scroll = self._main_screen.query_one("#lyrics-scroll", VerticalScroll)
+            width = max(1, body.size.width or scroll.size.width - 2)
+            row_offset = sum(
+                len(Text(f"  {_plain(line.text) or '♪'}").wrap(self.console, width))
+                for line in document.synced[: max(0, index)]
+            )
+            # Layout must measure the new wrapped content before clamping scroll.
+            self.call_after_refresh(
+                scroll.scroll_to, y=max(0, row_offset - scroll.size.height // 2), animate=False, force=True
+            )
+        else:
+            plain = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", document.plain)
+            body.update(plain or "No lyrics found for this track.")
+            source.update(_plain(f"{document.source} · plain lyrics · scroll ↑ ↓"))
 
     def action_help(self) -> None:
         self.push_screen(
@@ -412,7 +747,8 @@ class MyneApp(App[None]):
                 "PLAYBACK\n"
                 "Space        Pause / resume\n"
                 "n            Next track\n"
-                "l            Lyrics for the current track\n"
+                "l            Show / hide live lyrics; timed lines follow playback\n"
+                "v            Show / hide the real stereo RMS / peak visualizer\n"
                 "s            Listening statistics\n\n"
                 "SEARCH COMMANDS\n"
                 "/mix focus       Build a mood mix\n"
@@ -425,7 +761,16 @@ class MyneApp(App[None]):
         )
 
     def action_lyrics(self) -> None:
-        self.show_detail("Lyrics", self.service.lyrics)
+        self._lyrics_user_toggled = True
+        self._lyrics_visible = not self._lyrics_visible
+        self._layout_lyrics()
+        if self._lyrics_visible:
+            self._main_screen.query_one("#lyrics-scroll", VerticalScroll).focus()
+            self._render_lyrics(force=True)
+            self._status("Live lyrics · l returns to tracks · Tab moves focus · ↑ ↓ scroll plain lyrics")
+        else:
+            self._main_screen.query_one("#results", DataTable).focus()
+            self._status("Lyrics hidden · press l to show")
 
     def action_stats(self) -> None:
         self.show_detail("Listening statistics", self.service.stats)

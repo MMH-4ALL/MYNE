@@ -31,6 +31,7 @@ class FakeEngine:
         self.events: list[dict[str, Any]] = []
         self.seeks: list[float] = []
         self.streams: list[Stream] = []
+        self.visualizer_enabled = False
 
     def start(self) -> None:
         pass
@@ -68,6 +69,14 @@ class FakeEngine:
 
     def close(self) -> None:
         self.playing = False
+
+    def enable_visualizer(self, enabled: bool) -> None:
+        self.visualizer_enabled = enabled
+
+    def audio_levels(self) -> dict[str, Any]:
+        if not self.visualizer_enabled or not self.playing or self.paused:
+            return {"available": False, "rms": [], "peak": [], "error": None}
+        return {"available": True, "rms": [0.5, 0.25], "peak": [0.8, 0.5], "error": None}
 
 
 class FakeProvider:
@@ -291,7 +300,7 @@ def test_background_service_survives_independent_clients(
         first = PlayerClient(config, timeout=5)
         first.ensure_running()
         try:
-            assert first.request("ping")["version"] == 1
+            assert first.request("ping")["version"] == 2
             track = Track("a", "Durable")
             first.request("enqueue", tracks=[track.to_dict()])
             second = PlayerClient(config, timeout=5)

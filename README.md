@@ -33,8 +33,12 @@ needs WSL with mpv and audio configured; native Windows IPC is not implemented.
 
 ## What works
 
-- YouTube Music search, song/album/artist browsing, lyrics when available, and
-  radio recommendations through `ytmusicapi`.
+- YouTube Music search, song/album/artist browsing and radio recommendations
+  through `ytmusicapi`.
+- Automatic lyrics from LRCLIB, with synchronized line highlighting, local
+  caching, and a music-provider fallback. No lyrics API key is required.
+- A live stereo audio visualizer reads real RMS and peak measurements from
+  mpv's FFmpeg audio filter. Its amplitude history reflects the playing audio.
 - `yt-dlp` extracts an audio stream URL with `download=False`; mpv streams it
   directly. No normal-playback code downloads complete media files. mpv may
   buffer audio in memory. There is no download command in this release.
@@ -86,6 +90,11 @@ myne volume 60
 myne stop                           # retains upcoming tracks
 myne now
 myne lyrics
+myne lyrics --lrc                    # timestamped lyrics where available
+myne lyrics "Linkin Park Numb"       # lyrics without starting playback
+myne lyrics --refresh                # refresh the local lyric cache
+myne visualize                      # standalone live audio meters
+myne visualize --seconds 20
 myne mix "gym" --limit 20            # mood-search mix, adds to queue
 myne mix "focus" --play
 myne mix "night drive" --ai --play   # requires an AI endpoint
@@ -122,8 +131,18 @@ but cannot recover uncommitted listening seconds.
 `myne ui` opens the interface. Search, then select a result and press Enter to
 play or `a` to queue it. The on-screen footer lists transport/help shortcuts.
 The search field also accepts `/mix focus`, `/mix-ai night drive`, and
-`/radio Numb`. Closing the TUI leaves the player running. Network and database
-work runs outside the UI event loop.
+`/radio Numb`. Press `l` to show/hide lyrics and `v` to toggle the visualizer.
+Wide terminals show a lyrics side panel automatically; compact terminals switch
+between tracks and lyrics. Timed lines follow playback, pause and seeking. Plain
+lyrics remain scrollable and show their source. Closing the TUI leaves the player
+running. Network and database work runs outside the UI event loop.
+
+The visualizer displays decoded audio RMS and peak levels on a -60 to 0 dBFS
+scale; it is an amplitude meter/history, rather than a frequency spectrum. Pause,
+buffering, silence and missing measurements have distinct quiet states. Minimal
+mpv builds without the FFmpeg `astats` filter can continue playing with the meter
+disabled. After upgrading an already-running service, run `myne shutdown` once
+and start playback again to load the new feature protocol.
 
 ![Myne CLI TUI showing sample music metadata, search results, queue and playback controls](docs/tui.svg)
 
@@ -178,6 +197,8 @@ myne-cli/
 │   ├── container.py              # dependency injection composition root
 │   ├── storage.py                # SQLite transactions and statistics
 │   ├── mix.py                    # mood/AI strategies
+│   ├── lyrics.py                 # LRCLIB, provider fallback, LRC timing and cache
+│   ├── visualizer.py             # sample-derived audio level normalization
 │   ├── plugins.py                # explicit entry-point activation
 │   ├── providers/{base,youtube,local}.py
 │   └── playback/{client,daemon,mpv}.py
@@ -203,11 +224,13 @@ YouTube song.
 ## Roadmap
 
 Spotify metadata import, Discord Rich Presence, album collection management,
-scrobbling, an audio visualizer, multi-device sync, and additional providers are
+scrobbling, a frequency-spectrum visualizer, multi-device sync, and additional providers are
 future work. They are not represented as finished integrations. The provider
 and mix plugin contracts give extensions a stable place to start.
 
 Upstream references: [ytmusicapi](https://ytmusicapi.readthedocs.io/en/stable/),
 [yt-dlp embedding](https://github.com/yt-dlp/yt-dlp#embedding-yt-dlp),
 [mpv JSON IPC](https://mpv.io/manual/stable/#json-ipc),
+[LRCLIB API](https://lrclib.net/docs),
+[FFmpeg audio statistics](https://ffmpeg.org/ffmpeg-filters.html#astats),
 [Textual](https://textual.textualize.io/).
