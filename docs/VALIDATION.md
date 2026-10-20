@@ -1,5 +1,27 @@
 # Validation record
 
+## Version 0.3.1 playlist import and sidebar
+
+Validated locally on 20 October 2026 using Python 3.12.14. The offline suite
+checks link normalization, shared-link tracking removal, matching quality,
+duplicate/order preservation, bounded Spotify pagination, private/malformed
+responses, cancellation, persistence, concurrent name collisions, CLI commands,
+and real Textual sidebar/import/browse/play/queue interactions. Filesystem socket
+tests remain enabled in CI; the local environment restriction below still applies.
+
+A live Spotify public playlist exposed metadata successfully, and one song was
+matched to a YouTube Music result. A live YouTube Music playlist import returned
+the requested two tracks and a limit warning. No Spotify audio was requested.
+SoundCloud metadata and matching have injected-extractor regression coverage;
+the live extractor check here could not access the public sample set. This does
+not verify every upstream playlist, private access, or physical audio output.
+
+The actual UI was captured at 144×42 and 80×24 with the playlist sidebar, including
+the compact import modal, plus an Ember theme capture. The README preview uses
+fictional sample songs, original sample lyrics and demo meter levels. The imports
+are copies of exposed metadata; public Spotify embeds explicitly warn that the
+visible track list may be incomplete, and imported songs may be unmatched.
+
 ## Version 0.3.0 Studio workspace
 
 Validated locally on 20 October 2026 with **253 passing tests** on Python 3.12.14,

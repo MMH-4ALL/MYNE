@@ -54,6 +54,8 @@ needs WSL with mpv and audio configured; native Windows IPC is not implemented.
   invent them.
 - A full-screen Textual TUI with search, keyboard selection, a queue pane,
   playback progress, transport controls, help, lyrics and statistics.
+- A toggleable playlist sidebar and shared-link imports from Spotify, YouTube
+  Music, YouTube, and SoundCloud, with persistent song collections and source links.
 - Local audio playback and library search, plus an explicit provider extension
   contract and opt-in Python entry-point plugins.
 
@@ -130,23 +132,66 @@ but cannot recover uncommitted listening seconds.
 
 ## TUI
 
-Version 0.3 adds a Studio workspace with a library rail on wide terminals and
-view tabs in compact terminals. Studio, Midnight and Ember themes keep a single
+Version 0.3 adds a Studio workspace with a playlist sidebar, visible by default
+at widths of 100 columns or more. `Ctrl+B` or the Library button toggles it at
+any size; narrow terminals retain the view tabs. Studio, Midnight and Ember themes keep a single
 accent throughout the workspace; `t` switches themes and saves your choice.
 
-- **Discover, Liked, Recent and Saved queues:** press `1`–`4` or use the visible
+- **Discover, Liked, Recent and Playlists:** press `1`–`4` or use the visible
   navigation. Favorites persist on this device. Recent tracks come from listening
   segments recorded when a song ends, is skipped or is stopped.
 - **Command palette:** `Ctrl+K` opens searchable actions for the library, player,
   themes, lyrics, statistics and queue snapshots.
 - **Queue tools:** move a selected queued track with `Alt+Up` / `Alt+Down`, remove
   it with `Delete`, or shuffle upcoming tracks with `z`. The toolbar offers the
-  same actions and Save opens a named queue dialog. Enter on a saved queue
-  restores upcoming tracks while the current song continues.
+  same actions and Save opens a named queue dialog. Saved queues appear alongside
+  imported playlists; Enter opens their tracks. Opening a collection leaves the
+  current song and queue alone. `myne queue restore` still replaces upcoming tracks.
 - **Player controls:** `,` / `.` seek ten seconds back/forward; `r` cycles repeat
   off/all/one. Repeat persists across player restarts. Radio turns repeat off;
   enabling repeat leaves radio mode. Manual Next bypasses repeat-one and moves
   the skipped song to the end in repeat-all mode.
+
+### Playlist links
+
+Click **+ Import link** in the sidebar, press **Ctrl+O**, or paste a supported
+playlist link into the search box and press Enter. Give it an optional name,
+then choose **Import playlist**. Progress and Cancel stay available during matching.
+
+- **Spotify:** public `open.spotify.com/playlist/...` links and
+  `spotify:playlist:...` URIs. MYNE reads the public embed's exposed song metadata,
+  which may be a partial view; it always labels this limitation. An optional
+  `MYNE_SPOTIFY_TOKEN` uses Spotify's official playlist-items API and pagination
+  for playlists that the token is allowed to read. Current Spotify development
+  access generally requires ownership or collaborator access to read items.
+- **YouTube / YouTube Music:** playlist links containing `list=...`. Track IDs
+  are preserved directly, using the metadata API with an extractor fallback.
+- **SoundCloud:** public `soundcloud.com/artist/sets/playlist` links. The existing
+  extractor reads song metadata without downloading media files.
+
+Spotify and SoundCloud songs are matched to YouTube Music by title, artist,
+recording type, and duration when available. Weak matches are skipped rather
+than replaced with an unrelated song. These are YouTube versions, and MYNE does
+not stream Spotify audio. Matching depends on access to YouTube Music.
+
+Imported collections persist locally and appear by name in the sidebar. Open
+one to browse songs, use **▶ All** to start it or **+ All** to append it to the
+queue. **Info** shows the original source link, limits, and unmatched songs.
+Order and duplicates are preserved. Imports do not change playback or the
+upcoming queue, and an existing name receives a numbered suffix. Imports are
+one-time copies, not ongoing sync. Each import reads at most 500 entries; use
+`--limit` to choose a smaller CLI import. Removed/private/blocked songs can be
+omitted by the source. Expand short share links in the platform first and copy
+the full playlist address.
+
+```sh
+myne playlist import 'https://open.spotify.com/playlist/PLAYLIST_ID' --name 'Night drive'
+myne playlist import 'https://music.youtube.com/playlist?list=PLAYLIST_ID' --limit 100
+myne playlist list
+myne playlist show 'Night drive'
+myne playlist queue 'Night drive'
+myne playlist play 'Night drive'
+```
 
 `myne ui` opens the interface. Search, then select a result and press Enter to
 play or `a` to queue it. The on-screen footer lists transport/help shortcuts.
@@ -181,7 +226,7 @@ mpv builds without the FFmpeg `astats` filter can continue playing with the mete
 disabled. After upgrading an already-running service, run `myne shutdown` once
 and start playback again to load the new feature protocol.
 
-![Myne Studio workspace showing sample music metadata, favorites, queue, lyrics and playback controls](docs/tui.svg)
+![Myne playlist sidebar showing sample collections, imported tracks, queue, lyrics and playback controls](docs/tui.svg)
 
 *Actual interface captured with sample fixture metadata; no live playback or listening history is shown.*
 
@@ -260,7 +305,7 @@ YouTube song.
 
 ## Roadmap
 
-Spotify metadata import, Discord Rich Presence, album collection management,
+Discord Rich Presence, album collection management,
 scrobbling, a frequency-spectrum visualizer, multi-device sync, and additional providers are
 future work. They are not represented as finished integrations. The provider
 and mix plugin contracts give extensions a stable place to start.
@@ -271,3 +316,4 @@ Upstream references: [ytmusicapi](https://ytmusicapi.readthedocs.io/en/stable/),
 [LRCLIB API](https://lrclib.net/docs),
 [FFmpeg audio statistics](https://ffmpeg.org/ffmpeg-filters.html#astats),
 [Textual](https://textual.textualize.io/).
+Spotify import behavior follows its [current playlist API changes](https://developer.spotify.com/documentation/web-api/references/changes/february-2026).

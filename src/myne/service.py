@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from threading import Event
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -10,8 +11,9 @@ from myne.container import create_registry
 from myne.errors import MyneError, PlaybackError, ProviderError
 from myne.lyrics import LyricsDocument, LyricsService
 from myne.mix import AIMixStrategy, MixService
-from myne.models import Album, Artist, Track
+from myne.models import Album, Artist, Playlist, Track
 from myne.playback.client import PlayerClient
+from myne.playlists import ImportResult, PlaylistImporter, Progress
 from myne.plugins import PluginRegistry
 from myne.providers.base import MusicProvider
 from myne.storage import Store
@@ -25,6 +27,7 @@ class Application:
         registry: PluginRegistry | None = None,
         player: PlayerClient | None = None,
         lyrics_service: LyricsService | None = None,
+        playlist_importer: PlaylistImporter | None = None,
     ) -> None:
         self.config = config
         self.store = store or Store(config.database)
@@ -32,6 +35,7 @@ class Application:
         self.player = player or PlayerClient(config)
         self._live_player = player or PlayerClient(config, timeout=2.0)
         self._lyrics = lyrics_service or LyricsService(self.registry.provider, config.data_dir)
+        self._playlist_importer = playlist_importer
 
     @property
     def provider(self) -> MusicProvider:
@@ -117,6 +121,23 @@ class Application:
 
     def playlists(self) -> list[tuple[str, int]]:
         return self.store.playlists()
+
+    def playlist(self, name: str) -> Playlist:
+        return self.store.playlist(name)
+
+    def import_playlist(self, link: str, name: str | None = None, *, limit: int = 500,
+                        progress: Progress | None = None, cancel: Event | None = None) -> ImportResult:
+        if name is not None and (not name.strip() or len(name.strip()) > 80):
+            raise MyneError("Give the playlist a name between 1 and 80 characters.")
+        importer = self._playlist_importer or PlaylistImporter(
+            self.registry.provider("youtube"), cookies_file=self.config.cookies_file
+        )
+        result = importer.read(link, limit=limit, progress=progress, cancel=cancel)
+        if cancel is not None and cancel.is_set():
+            raise MyneError("Playlist import cancelled. Nothing was saved.")
+        from dataclasses import replace
+        playlist = replace(result.playlist, name=name.strip()) if name is not None else result.playlist
+        return replace(result, playlist=self.store.import_playlist(playlist))
 
     def save_playlist(self, name: str) -> int:
         if not name.strip() or len(name) > 80:

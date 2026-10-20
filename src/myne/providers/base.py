@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 
 from myne.errors import ProviderError
-from myne.models import Album, Artist, Stream, Track
+from myne.models import Album, Artist, Playlist, Stream, Track
 
 
 class MusicProvider(ABC):
@@ -29,3 +29,6 @@ class MusicProvider(ABC):
 
     def lyrics(self, track: Track) -> str | None:
         return None
+
+    def get_playlist(self, playlist_id: str, limit: int = 500) -> Playlist:
+        raise ProviderError(f"{self.name} does not support playlist browsing.")

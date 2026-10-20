@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from myne.errors import ProviderError
-from myne.models import Album, Artist, Stream, Track
+from myne.models import Album, Artist, Playlist, Stream, Track
 from myne.providers.base import MusicProvider
 
 
@@ -172,6 +172,27 @@ class YouTubeMusicProvider(MusicProvider):
         if track is None:
             raise ProviderError("This song is unavailable or has no playable metadata.")
         return track
+
+    def get_playlist(self, playlist_id: str, limit: int = 500) -> Playlist:
+        playlist_id = _identifier(playlist_id)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ProviderError("Import between 1 and 500 playlist tracks at a time.")
+        result = self._call("get_playlist", playlist_id, limit=limit + 1)
+        if not isinstance(result, Mapping) or not (title := _name(result.get("title"))):
+            raise ProviderError("This YouTube playlist is unavailable.")
+        rows = result.get("tracks")
+        if not isinstance(rows, list):
+            raise ProviderError("This YouTube playlist did not expose its tracks.")
+        # A playlist can intentionally repeat a song; _tracks deduplicates
+        # search results, so map playlist rows individually instead.
+        tracks = tuple(track for row in rows[:limit] if (track := self._track(row)) is not None)
+        warnings = []
+        total = result.get("trackCount")
+        if len(rows) > limit or (isinstance(total, int) and total > limit):
+            warnings.append(f"Import limited to the first {limit} entries.")
+        if len(tracks) < min(len(rows), limit):
+            warnings.append("Private, removed, or unavailable entries were omitted by the source.")
+        return Playlist(title, tracks, "YouTube Music", warnings=tuple(warnings))
 
     def get_album(self, album_id: str) -> Album:
         album_id = _identifier(album_id)

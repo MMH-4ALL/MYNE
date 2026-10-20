@@ -1,24 +1,31 @@
 Screen { background: $background; color: $foreground; }
 #masthead { height: 2; padding: 0 2; background: $surface; }
 #brand { width: 1fr; height: 2; color: $primary; text-style: bold; }
-#header-right { width: 33; height: 2; }
+#header-right { width: 38; height: 2; }
 #session-state { height: 1; color: $text-muted; text-align: right; }
 #header-buttons { height: 1; align-horizontal: right; }
 #header-buttons Button {
-    width: 13; min-width: 8; height: 1; min-height: 1; border: none; padding: 0 1;
+    width: 12; min-width: 8; height: 1; min-height: 1; border: none; padding: 0 1;
     color: $primary; background: $surface;
 }
 #workspace { height: 1fr; min-height: 9; }
 #sidebar {
-    width: 20; padding: 1; background: $surface; border-right: solid $panel;
+    width: 24; padding: 1; background: $surface; border-right: solid $panel;
     overflow-y: auto;
 }
 #sidebar .sidebar-label { height: 2; color: $text-muted; text-style: bold; }
 #sidebar .view-button, #sidebar .mood-button {
-    width: 100%; height: 2; min-height: 2; border: none; padding: 0 1;
+    width: 100%; height: 1; min-height: 1; border: none; padding: 0 1;
     content-align: left middle; background: $surface; color: $foreground;
 }
 #sidebar .selected { color: $primary; background: $primary 12%; text-style: bold; }
+#sidebar-playlists { height: auto; min-height: 2; max-height: 10; border: none; padding: 0; background: $surface; }
+#sidebar-playlists > .option-list--option-highlighted { color: $primary; background: $primary 12%; }
+#playlist-tools { display: none; height: 1; background: $surface; }
+#playlist-tools Button {
+    height: 1; min-height: 1; min-width: 1; width: 1fr; border: none; padding: 0;
+    background: $surface; color: $primary;
+}
 #library-count { height: 4; margin-top: 1; color: $text-muted; }
 #rail-tip { height: auto; margin-top: 1; color: $text-muted; }
 #main { width: 1fr; }
@@ -82,6 +89,10 @@ Footer { background: $surface; }
 Screen.compact #player { height: 10; }
 Screen.compact #player.no-visualizer { height: 8; }
 Screen.compact #audio-meter { height: 2; }
+Screen.compact #sidebar { padding: 0 1; }
+Screen.compact #sidebar .sidebar-label { height: 1; }
+Screen.compact #mood-label, Screen.compact #mood-focus, Screen.compact #mood-night,
+Screen.compact #library-count, Screen.compact #rail-tip { display: none; }
 Button:focus { text-style: bold reverse; }
 DetailScreen { align: center middle; background: $background 85%; }
 DetailScreen > Vertical { background: $surface; border: solid $primary; }

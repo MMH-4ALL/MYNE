@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.1
+
+- Toggleable playlist sidebar with direct collection navigation at all supported
+  terminal sizes. Ctrl+B shows/hides it; Ctrl+O opens playlist link import.
+- Paste public Spotify, YouTube Music, YouTube or SoundCloud playlist links into
+  the import dialog or search box. Imports run away from the UI event loop with
+  progress, cancellation, conservative matching, and no audio downloads.
+- Optional Spotify user token uses the current playlist-items API with bounded
+  pagination; public embed imports always disclose possible incompleteness.
+- Imported playlists retain their order, duplicate entries, source link and
+  unmatched-song notes in SQLite. Existing names receive a suffix, and saving
+  a collection leaves the current song and upcoming queue untouched.
+- Browse playlist tracks, play all, queue all, or inspect source/import details.
+  Existing saved queues now open as collections; CLI queue restore is unchanged.
+- New `myne playlist import/list/show/play/queue` commands and JSON output.
+
 ## 0.3.0
 
 - A new Studio workspace with a library rail on wide terminals, compact view

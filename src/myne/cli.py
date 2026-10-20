@@ -29,6 +29,8 @@ from myne.service import Application
 app = typer.Typer(name="myne", help="My Music. My Queue. My Experience. Myne CLI.", no_args_is_help=True)
 queue_app = typer.Typer(help="Manage your persistent upcoming queue.", no_args_is_help=True)
 app.add_typer(queue_app, name="queue")
+playlist_app = typer.Typer(help="Import and browse playlists from shared links.", no_args_is_help=True)
+app.add_typer(playlist_app, name="playlist")
 console = Console(highlight=False)
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -244,6 +246,52 @@ def queue_clear(ctx: typer.Context) -> None:
 def queue_remove(ctx: typer.Context, position: int = typer.Argument(..., min=1)) -> None:
     track = application(ctx).store.remove(position - 1)
     emit(ctx, track.to_dict(), f"Removed · {track.title}")
+
+
+@playlist_app.command("import")
+@handled
+def playlist_import(
+    ctx: typer.Context, link: str,
+    name: str | None = typer.Option(None, help="Name the saved playlist."),
+    limit: int = typer.Option(500, min=1, max=500),
+) -> None:
+    """Import a Spotify, YouTube Music, YouTube or SoundCloud playlist link."""
+    result = application(ctx).import_playlist(link, name, limit=limit)
+    emit(ctx, asdict(result), f"Imported {len(result.playlist.tracks)} tracks as {result.playlist.name}.")
+    if not ctx.obj.get("json"):
+        for warning in result.playlist.warnings:
+            console.print(Text(warning, style="yellow"))
+        for skipped in result.skipped:
+            console.print(Text(f"Unmatched · {skipped}", style="dim"))
+
+
+@playlist_app.command("list")
+@handled
+def playlist_list(ctx: typer.Context) -> None:
+    rows = application(ctx).playlists()
+    emit(ctx, [{"name": name, "tracks": count} for name, count in rows],
+         "\n".join(f"{name} · {count} tracks" for name, count in rows) or "No playlists. Import a playlist link to start.")
+
+
+@playlist_app.command("show")
+@handled
+def playlist_show(ctx: typer.Context, name: str) -> None:
+    playlist = application(ctx).playlist(name)
+    tracks_table(ctx, list(playlist.tracks), playlist.name)
+
+
+@playlist_app.command("play")
+@handled
+def playlist_play(ctx: typer.Context, name: str) -> None:
+    service = application(ctx)
+    emit(ctx, service.play(list(service.playlist(name).tracks)), f"Playing playlist · {name}")
+
+
+@playlist_app.command("queue")
+@handled
+def playlist_queue(ctx: typer.Context, name: str) -> None:
+    service = application(ctx)
+    emit(ctx, service.enqueue(list(service.playlist(name).tracks)), f"Playlist added to queue · {name}")
 
 
 @app.command()

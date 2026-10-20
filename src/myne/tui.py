@@ -21,11 +21,13 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import DescendantFocus, Resize
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, DataTable, Footer, Input, ProgressBar, Static
+from textual.widgets import Button, DataTable, Footer, Input, OptionList, ProgressBar, Static
+from textual.widgets.option_list import Option
 
-from myne.models import Track
+from myne.models import Playlist, Track
 from myne.motion import AudioMotion, reduced_motion_requested
-from myne.ui.screens import SaveQueueScreen
+from myne.playlists import ImportResult, playlist_link
+from myne.ui.screens import ImportPlaylistScreen, SaveQueueScreen
 from myne.ui.themes import THEME_NAMES, THEMES
 
 if TYPE_CHECKING:
@@ -148,10 +150,12 @@ class MyneApp(App[None]):
     BINDINGS = [
         Binding("ctrl+f", "search_focus", "Search", priority=True),
         Binding("ctrl+k", "command_palette", "Actions", priority=True),
+        Binding("ctrl+b", "sidebar", "Sidebar", priority=True, show=False),
+        Binding("ctrl+o", "import_playlist", "Import", priority=True, show=False),
         Binding("1", "discover", "Discover", show=False),
         Binding("2", "favorites", "Liked", show=False),
         Binding("3", "recent", "Recent", show=False),
-        Binding("4", "playlists", "Saved queues", show=False),
+        Binding("4", "playlists", "Playlists", show=False),
         Binding("f", "favorite", "Like", show=False),
         Binding("r", "repeat", "Repeat", show=False),
         Binding("z", "shuffle", "Shuffle", show=False),
@@ -185,6 +189,9 @@ class MyneApp(App[None]):
         self._discover_results: list[Track] = []
         self._favorites: set[tuple[str, str]] = set()
         self._playlist_names: list[str] = []
+        self._sidebar_playlist_names: list[str] = []
+        self._open_playlist: Playlist | None = None
+        self._sidebar_override: bool | None = None
         self._reduced_motion = reduced_motion_requested() if reduced_motion is None else reduced_motion
         if self._reduced_motion:
             self.animation_level = "none"
@@ -229,28 +236,38 @@ class MyneApp(App[None]):
             with Vertical(id="header-right"):
                 yield Static("READY TO LISTEN", id="session-state", markup=False)
                 with Horizontal(id="header-buttons"):
+                    yield Button("☰ Library", id="sidebar-toggle", tooltip="Toggle the library sidebar · Ctrl+B")
                     yield Button("Commands", id="commands", tooltip="Find any action · Ctrl+K")
                     yield Button("Theme", id="theme", tooltip="Switch the color palette · t")
         with Horizontal(id="workspace"):
             with Vertical(id="sidebar"):
                 yield Static("YOUR LIBRARY", classes="sidebar-label")
                 for view, label in (("discover", "Discover"), ("favorites", "Liked tracks"),
-                                    ("recent", "Recent plays"), ("playlists", "Saved queues")):
+                                    ("recent", "Recent plays"), ("playlists", "All playlists")):
                     yield Button(label, id=f"rail-{view}", classes="view-button" + (" selected" if view == "discover" else ""))
-                yield Static("IN THE MOOD", classes="sidebar-label")
+                yield Static("YOUR PLAYLISTS", classes="sidebar-label")
+                yield Button("+ Import link", id="import-playlist", classes="mood-button")
+                yield OptionList(id="sidebar-playlists", compact=True)
+                yield Static("IN THE MOOD", id="mood-label", classes="sidebar-label")
                 yield Button("Focus session", id="mood-focus", classes="mood-button")
                 yield Button("Night drive", id="mood-night", classes="mood-button")
                 yield Static("0 liked tracks\n0 in your queue", id="library-count", markup=False)
-                yield Static("Ctrl+K commands\n1–4 switch view", id="rail-tip", markup=False)
+                yield Static("Ctrl+B sidebar\nCtrl+O import link\n1–4 switch view", id="rail-tip", markup=False)
             with Vertical(id="main"):
                 yield Input(placeholder="Find your next favorite · songs, artists, /mix focus", id="search")
                 with Horizontal(id="view-tabs"):
                     for view, label in (("discover", "1 Discover"), ("favorites", "2 Liked"),
-                                        ("recent", "3 Recent"), ("playlists", "4 Saved queues")):
+                                        ("recent", "3 Recent"), ("playlists", "4 Playlists")):
                         yield Button(label, id=f"tab-{view}", classes="view-button" + (" selected" if view == "discover" else ""))
                 yield Static("Search for music or open your library. Ctrl+K finds every action.", id="status", markup=False)
                 with Horizontal(id="library"):
                     with Vertical(id="results-pane", classes="pane"):
+                        with Horizontal(id="playlist-tools"):
+                            yield Button("‹ All", id="playlist-back", tooltip="Browse all playlists")
+                            yield Button("▶ All", id="playlist-play", tooltip="Play every song in this playlist")
+                            yield Button("+ All", id="playlist-queue", tooltip="Add every song to the queue")
+                            yield Button("Info", id="playlist-info", tooltip="Source link and import warnings")
+                            yield Button("Import", id="playlist-import", tooltip="Import a playlist link · Ctrl+O")
                         yield DataTable(id="results", cursor_type="row", zebra_stripes=True)
                         yield Static("A song, an artist, a mood. Start with a search.", id="results-empty", classes="empty", markup=False)
                     with Vertical(id="queue-pane", classes="pane"):
@@ -321,11 +338,13 @@ class MyneApp(App[None]):
                 pass
 
     def _layout_lyrics(self) -> None:
-        sidebar = self.size.width >= 124 and self.size.height >= 30
+        sidebar = self._sidebar_override if self._sidebar_override is not None else self.size.width >= 100
         self._main_screen.query_one("#sidebar").display = sidebar
         self._main_screen.query_one("#view-tabs").display = not sidebar
         self._main_screen.set_class(self.size.height < 29, "compact")
-        wide = self.size.width - (20 if sidebar else 0) >= 110
+        available = self.size.width - (24 if sidebar else 0)
+        self._main_screen.query_one("#queue-pane").display = available >= 68
+        wide = available >= 90
         if not self._lyrics_user_toggled:
             self._lyrics_visible = wide
         pane = self._main_screen.query_one("#lyrics-pane")
@@ -349,7 +368,9 @@ class MyneApp(App[None]):
             ("Discover", "Return to your search results", self.action_discover),
             ("Liked tracks", "Open your saved favorites", self.action_favorites),
             ("Recently played", "Songs from your listening history", self.action_recent),
-            ("Saved queues", "Browse named queue snapshots", self.action_playlists),
+            ("Playlists", "Browse saved and imported collections", self.action_playlists),
+            ("Import playlist link", "Spotify, YouTube Music, YouTube or SoundCloud", self.action_import_playlist),
+            ("Toggle sidebar", "Show your library and playlists", self.action_sidebar),
             ("Like / unlike track", "Save the selected track or current song", self.action_favorite),
             ("Save queue", "Give the upcoming queue a name", self.action_save_playlist),
             ("Shuffle queue", "Randomize upcoming tracks", self.action_shuffle),
@@ -368,8 +389,14 @@ class MyneApp(App[None]):
 
     def _activate_view(self, view: str) -> None:
         self._view = view
+        if view != "playlist":
+            self._open_playlist = None
+        self._main_screen.query_one("#playlist-tools").display = view in {"playlists", "playlist"}
+        for button_id in ("playlist-back", "playlist-play", "playlist-queue", "playlist-info"):
+            self._main_screen.query_one(f"#{button_id}", Button).display = view == "playlist"
         for button in self._main_screen.query(".view-button"):
-            button.set_class(button.id in {f"rail-{view}", f"tab-{view}"}, "selected")
+            selected_view = "playlists" if view == "playlist" else view
+            button.set_class(button.id in {f"rail-{selected_view}", f"tab-{selected_view}"}, "selected")
 
     def _render_tracks(self, tracks: list[Track]) -> None:
         self.results = list(tracks)
@@ -389,8 +416,9 @@ class MyneApp(App[None]):
                           Text(_plain(", ".join(track.artists) or "Unknown"), no_wrap=True, overflow="ellipsis"),
                           Text(_clock(track.duration)), Text("♥" if liked else "", style=self.current_theme.primary),
                           key=str(index))
-        titles = {"discover": "DISCOVER", "favorites": "LIKED TRACKS", "recent": "RECENTLY PLAYED"}
-        self._main_screen.query_one("#results-pane").border_title = titles.get(self._view, "DISCOVER")
+        titles = {"discover": "DISCOVER", "favorites": "LIKED TRACKS", "recent": "RECENTLY PLAYED",
+                  "playlist": _plain(self._open_playlist.name) if self._open_playlist else "PLAYLIST"}
+        self._main_screen.query_one("#results-pane").border_title = Text(titles.get(self._view, "DISCOVER"))
         self._main_screen.query_one("#results-pane").border_subtitle = f"{len(tracks)} tracks · f to like"
         empty = self._main_screen.query_one("#results-empty", Static)
         empty.display = not bool(tracks)
@@ -423,6 +451,7 @@ class MyneApp(App[None]):
             if self._view == "discover":
                 self._render_tracks(self._discover_results)
             self._update_library_counts()
+            self.refresh_sidebar()
         except Exception as exc:
             self._status(f"Library unavailable: {exc}", error=True)
 
@@ -443,6 +472,93 @@ class MyneApp(App[None]):
         self._activate_view("playlists")
         self.load_library("playlists")
 
+    def action_sidebar(self) -> None:
+        self._sidebar_override = not self._main_screen.query_one("#sidebar").display
+        self._layout_lyrics()
+        if self._sidebar_override:
+            self._main_screen.query_one("#rail-playlists", Button).focus()
+        else:
+            self._main_screen.query_one("#results", DataTable).focus()
+
+    @work(exclusive=True, group="sidebar-library", exit_on_error=False)
+    async def refresh_sidebar(self) -> None:
+        try:
+            playlists = await asyncio.to_thread(self.service.playlists)
+            self._sidebar_playlist_names = [name for name, _ in playlists]
+            options = self._main_screen.query_one("#sidebar-playlists", OptionList)
+            options.clear_options()
+            width = max(10, (options.content_size.width or 20) - 4)
+            for index, (name, count) in enumerate(playlists):
+                count_label = f" · {count}"
+                label = Text(_plain(name), no_wrap=True, overflow="ellipsis")
+                label.truncate(max(4, width - len(count_label)), overflow="ellipsis")
+                label.append(count_label)
+                options.add_option(Option(label, id=str(index)))
+            options.highlighted = (self._sidebar_playlist_names.index(self._open_playlist.name)
+                                   if self._open_playlist and self._open_playlist.name in self._sidebar_playlist_names
+                                   else 0 if playlists else None)
+        except Exception:
+            self._status("Could not refresh your playlists. Try opening the library again.", error=True)
+
+    @on(OptionList.OptionSelected, "#sidebar-playlists")
+    def choose_sidebar_playlist(self, event: OptionList.OptionSelected) -> None:
+        if 0 <= event.option_index < len(self._sidebar_playlist_names):
+            self.open_playlist(self._sidebar_playlist_names[event.option_index])
+
+    @work(exclusive=True, group="library-view", exit_on_error=False)
+    async def open_playlist(self, name: str) -> None:
+        self._activate_view("playlist")
+        self._status("Opening playlist…")
+        try:
+            playlist = await asyncio.to_thread(self.service.playlist, name)
+            if self._view != "playlist":
+                return
+            self._open_playlist = playlist
+            if name in self._sidebar_playlist_names:
+                self._main_screen.query_one("#sidebar-playlists", OptionList).highlighted = self._sidebar_playlist_names.index(name)
+            self._render_tracks(list(playlist.tracks))
+            self._selection_source = "results"
+            self._main_screen.query_one("#results", DataTable).focus()
+            notes = ""
+            if any("partial playlist" in warning for warning in playlist.warnings):
+                notes = " · Public view may be partial · Info shows import notes"
+            elif playlist.warnings:
+                notes = " · Info shows source limits and unmatched songs"
+            else:
+                notes = " · Enter plays · + All queues the playlist"
+            self._status(f"{playlist.source} · {len(playlist.tracks)} tracks{notes}")
+        except Exception as exc:
+            self._status(f"Could not open playlist: {exc}", error=True)
+
+    def action_import_playlist(self) -> None:
+        self.push_screen(ImportPlaylistScreen(self.service.import_playlist), self._playlist_imported)
+
+    def _playlist_imported(self, result: ImportResult | None) -> None:
+        if result is None:
+            self._status("Import cancelled.")
+            return
+        self.refresh_sidebar()
+        self.open_playlist(result.playlist.name)
+
+    def action_playlist_play(self) -> None:
+        if self._open_playlist and self._open_playlist.tracks:
+            self.mutate("Playing", self.service.play, list(self._open_playlist.tracks))
+
+    def action_playlist_queue(self) -> None:
+        if self._open_playlist and self._open_playlist.tracks:
+            self.mutate("Playlist added to queue", self.service.enqueue, list(self._open_playlist.tracks))
+
+    def action_playlist_info(self) -> None:
+        if playlist := self._open_playlist:
+            body = f"{playlist.source} · {len(playlist.tracks)} tracks\n"
+            if playlist.source_url:
+                body += f"\nSource: {playlist.source_url}\n"
+            body += "\n" + "\n".join(playlist.warnings)
+            if playlist.source in {"Spotify", "SoundCloud"}:
+                body += "\n\nThese songs are matched YouTube versions. No audio is streamed from " + playlist.source + "."
+            body = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", body)
+            self.push_screen(DetailScreen(_plain(playlist.name), body))
+
     @work(exclusive=True, group="library-view", exit_on_error=False)
     async def load_library(self, view: str) -> None:
         self._status("Opening your library…")
@@ -456,15 +572,16 @@ class MyneApp(App[None]):
                 self._selected_result = 0
                 table = self._main_screen.query_one("#results", DataTable)
                 table.clear(columns=True)
-                table.add_columns("Saved queue", "Tracks")
+                table.add_columns("Playlist", "Tracks")
                 for index, (name, count) in enumerate(playlists):
                     table.add_row(Text(_plain(name)), str(count), key=str(index))
-                self._main_screen.query_one("#results-pane").border_title = "SAVED QUEUES"
-                self._main_screen.query_one("#results-pane").border_subtitle = "Enter to restore upcoming tracks"
+                self._main_screen.query_one("#results-pane").border_title = "YOUR PLAYLISTS"
+                self._main_screen.query_one("#results-pane").border_subtitle = "Enter to open · Ctrl+O to import"
                 empty = self._main_screen.query_one("#results-empty", Static)
                 empty.display = not bool(playlists)
-                empty.update("Use Save in the queue to create a snapshot.")
-                self._status(f"{len(playlists)} saved queues · Enter restores · Start begins playback")
+                empty.update("Import a playlist link, or Save your upcoming queue.")
+                self._status(f"{len(playlists)} playlists · Enter opens the tracks · Ctrl+O imports a link")
+                self.refresh_sidebar()
             else:
                 read = self.service.favorites if view == "favorites" else self.service.recent_tracks
                 tracks = await asyncio.to_thread(read)
@@ -534,12 +651,26 @@ class MyneApp(App[None]):
 
     def _save_playlist_named(self, name: str | None) -> None:
         if name is not None:
-            self.mutate(f"Saved queue · {name}", self.service.save_playlist, name)
+            def save() -> int:
+                return self.service.save_playlist(name)
+            self.save_named_queue(name, save)
 
-    def _restore_selected_playlist(self) -> None:
+    @work(group="playlist-save", exit_on_error=False)
+    async def save_named_queue(self, name: str, save: Callable[[], int]) -> None:
+        try:
+            async with self._mutation_lock:
+                await asyncio.to_thread(save)
+            self.refresh_sidebar()
+            self._status(f"Saved queue · {name}")
+            if self._view == "playlists":
+                self.load_library("playlists")
+        except Exception as exc:
+            self._status(f"Could not save queue: {exc}", error=True)
+
+    def _open_selected_playlist(self) -> None:
         if 0 <= self._selected_result < len(self._playlist_names):
             name = self._playlist_names[self._selected_result]
-            self.mutate(f"Restored · {name} · press Start to play", self.service.restore_playlist, name)
+            self.open_playlist(name)
 
     def _queue_target(self) -> Track | None:
         if self._selection_source == "queue" and 0 <= self._selected_queue < len(self.queued):
@@ -582,6 +713,14 @@ class MyneApp(App[None]):
         if not query:
             self._status("Type a song, artist, /mix mood, or /radio song.")
             return
+        if query.startswith(("https://", "spotify:playlist:")):
+            try:
+                playlist_link(query)
+            except Exception:
+                pass
+            else:
+                self.push_screen(ImportPlaylistScreen(self.service.import_playlist, query), self._playlist_imported)
+                return
         self.search_music(query)
 
     @work(exclusive=True, group="search", exit_on_error=False)
@@ -665,7 +804,7 @@ class MyneApp(App[None]):
     def action_play(self) -> None:
         tracks = self._selected()
         if self._view == "playlists" and self._selection_source != "queue":
-            self._restore_selected_playlist()
+            self._open_selected_playlist()
             return
         if tracks:
             if self._selection_source == "queue":
@@ -723,6 +862,13 @@ class MyneApp(App[None]):
             "stop": self.action_stop,
             "commands": self.action_command_palette,
             "theme": self.action_theme,
+            "sidebar-toggle": self.action_sidebar,
+            "import-playlist": self.action_import_playlist,
+            "playlist-import": self.action_import_playlist,
+            "playlist-back": self.action_playlists,
+            "playlist-play": self.action_playlist_play,
+            "playlist-queue": self.action_playlist_queue,
+            "playlist-info": self.action_playlist_info,
             "queue-up": self.action_queue_up,
             "queue-down": self.action_queue_down,
             "queue-remove": self.action_queue_remove,
@@ -1144,7 +1290,9 @@ class MyneApp(App[None]):
                 "DISCOVER\n"
                 "Ctrl+F       Focus the search box\n"
                 "Ctrl+K       Search all actions in the command palette\n"
-                "1 / 2 / 3 / 4  Discover / Liked / Recent / Saved queues\n"
+                "1 / 2 / 3 / 4  Discover / Liked / Recent / Playlists\n"
+                "Ctrl+B       Show / hide the sidebar at any terminal size\n"
+                "Ctrl+O       Import a playlist link\n"
                 "Enter        Search; play a selected result or queue track\n"
                 "↑ / ↓        Select tracks\n"
                 "Tab          Move between panes and controls\n"
@@ -1154,7 +1302,11 @@ class MyneApp(App[None]):
                 "Delete       Remove the selected queued track\n"
                 "Alt+↑ / ↓    Move the selected queued track\n"
                 "z            Shuffle upcoming tracks\n"
-                "Save         Name the upcoming queue; Enter restores a saved queue\n\n"
+                "Save         Name the upcoming queue; Enter opens a playlist\n"
+                "PLAYLISTS\n"
+                "Paste a Spotify, YouTube Music, YouTube, or SoundCloud playlist link.\n"
+                "Use ▶ All to play or + All to append the full playlist.\n"
+                "Info shows the source link, partial imports, and unmatched songs.\n\n"
                 "PLAYBACK\n"
                 "Space        Start queue / pause / resume\n"
                 "n            Next track\n"

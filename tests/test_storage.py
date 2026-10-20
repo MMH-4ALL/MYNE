@@ -3,12 +3,39 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from myne.errors import MyneError
-from myne.models import Track
+from myne.models import Playlist, Track
 from myne.storage import Store
 
 
 def song(i: int) -> Track:
     return Track(str(i), f"Song {i}", ("Artist",), 120, genres=("Rock",))
+
+
+def test_imported_playlists_persist_without_replacing_queue_names_or_current(tmp_path):
+    store = Store(tmp_path / "db")
+    store.enqueue([song(1), song(2)])
+    store.claim_next()
+    store.save_queue("Night")
+    imported = Playlist("Night", (song(3), song(3), song(4)), "Spotify",
+                        "https://open.spotify.com/playlist/" + "A" * 22, ("Public view may be partial.",))
+    saved = store.import_playlist(imported)
+    assert saved.name == "Night (2)"
+    assert store.playlist("Night").tracks == (song(2),)
+    assert store.current() == song(1)
+    assert store.queue() == [song(2)]
+    assert Store(store.database).playlist("Night (2)") == saved
+    assert store.import_playlist(imported).name == "Night (3)"
+    store.save_queue("Night (2)")
+    assert store.playlist("Night (2)").source == "Saved queue"
+    assert store.playlist("Night (2)").source_url is None
+
+
+def test_concurrent_playlist_imports_keep_all_collections(tmp_path):
+    store = Store(tmp_path / "db")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: store.import_playlist(Playlist("Shared", (song(1),))), range(8)))
+    assert len({p.name for p in results}) == 8
+    assert len(store.playlists()) == 8
 
 
 def test_queue_survives_restart_and_recovers_interrupted_current(tmp_path):

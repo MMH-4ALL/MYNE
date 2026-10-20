@@ -37,6 +37,47 @@ def test_cli_persistent_queue_json_and_snapshot(isolated, tmp_path):
     assert "[bold]" in result.output
 
 
+def test_cli_playlist_import_list_show_and_queue(isolated, monkeypatch):
+    from myne.models import Playlist
+    from myne.playlists import ImportResult
+
+    service = Application(Config.from_env())
+    track = Track("abcdefghijk", "Imported song", ("Artist",))
+    importer = Mock()
+    importer.read.return_value = ImportResult(Playlist("Night", (track,), "Spotify",
+        "https://open.spotify.com/playlist/" + "A" * 22, ("Public view may be partial.",)), 1)
+    service._playlist_importer = importer
+    monkeypatch.setattr("myne.cli.application", lambda _ctx: service)
+    result = isolated.invoke(app, ["--json", "playlist", "import", "https://open.spotify.com/playlist/" + "A" * 22])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["playlist"]["name"] == "Night"
+    assert service.queue() == []
+    assert json.loads(isolated.invoke(app, ["--json", "playlist", "list"]).output) == [{"name": "Night", "tracks": 1}]
+    assert json.loads(isolated.invoke(app, ["--json", "playlist", "show", "Night"]).output)[0]["id"] == track.id
+    assert isolated.invoke(app, ["playlist", "queue", "Night"]).exit_code == 0
+    assert service.queue() == [track]
+
+
+def test_cancelled_import_does_not_save_a_collection_or_change_queue(isolated):
+    from threading import Event
+
+    from myne.models import Playlist
+    from myne.playlists import ImportResult
+
+    cancel = Event()
+    importer = Mock()
+    def read(*args, **kwargs):
+        cancel.set()
+        return ImportResult(Playlist("Cancelled", (Track("x", "Song"),)), 1)
+    importer.read.side_effect = read
+    service = Application(Config.from_env(), playlist_importer=importer)
+    service.enqueue([Track("queued", "Queue stays")])
+    with pytest.raises(MyneError, match="cancelled"):
+        service.import_playlist("link", cancel=cancel)
+    assert service.playlists() == []
+    assert service.queue() == [Track("queued", "Queue stays")]
+
+
 def test_cli_validation_and_no_player_status(isolated):
     for args in (["volume", "101"], ["queue", "remove", "0"], ["search", "a", "--limit", "0"]):
         assert isolated.invoke(app, args).exit_code == 2

@@ -188,6 +188,7 @@ local provider. Change player settings before starting the service; run
 | `MYNE_VOLUME` | Initial volume, 0–100 | `70`; later changes persist |
 | `MYNE_AUTH_FILE` | ytmusicapi authentication JSON | unset |
 | `MYNE_COOKIES_FILE` | yt-dlp cookie file | unset |
+| `MYNE_SPOTIFY_TOKEN` | Optional Spotify user access token for authorized playlist imports; kept in the process environment, not saved in SQLite | unset; public embed metadata is used |
 | `MYNE_LIBRARY` | Local music library root | unset |
 | `MYNE_PLUGINS` | Comma-separated enabled entry-point names | none |
 | `MYNE_MIX_ENDPOINT` | Full AI chat endpoint | unset |
@@ -201,6 +202,16 @@ Unix socket path lengths are limited, so use a short runtime path. A custom
 
 ## Troubleshooting
 
+- For playlist imports, use **Ctrl+O** in the UI or `myne playlist import LINK`.
+  Spotify's public embed can expose only part of a playlist; MYNE labels it as
+  potentially partial. The optional token uses the current `/items` API with
+  pagination, but Spotify may restrict item access to your own/collaborative
+  playlists. Supply a valid user token with any necessary read scopes; no client
+  secret is needed by MYNE. Tokens can expire: refresh yours and retry if refused.
+  MYNE does not request Spotify audio or remove platform access restrictions.
+- Expand short Spotify/SoundCloud share links in their platform before copying
+  the full playlist address. Private, removed, regional, or unmatched songs may
+  be missing; open the playlist's **Info** panel for import notes.
 - `myne doctor` checks the interpreter, mpv executable, paths and plugin setup
   without contacting music services.
 - If mpv is missing, install it using your OS package manager or set `MYNE_MPV`.

@@ -11,8 +11,10 @@ import pytest
 from rich.text import Text
 from textual.widgets import DataTable, Input, Static
 
+from myne.errors import MyneError
 from myne.lyrics import LyricsDocument, LyricsLine
-from myne.models import Track
+from myne.models import Playlist, Track
+from myne.playlists import ImportResult
 from myne.tui import DetailScreen, MyneApp, _clock, _meter
 
 
@@ -37,6 +39,10 @@ class FakeApplication:
         self.liked: list[Track] = []
         self.recent: list[Track] = []
         self.saved: dict[str, list[Track]] = {}
+        self.saved_sources: dict[str, Playlist] = {}
+        self.import_gate: threading.Event | None = None
+        self.import_started = threading.Event()
+        self.import_error: str | None = None
         self.theme_name = "myne-studio"
         self.document: LyricsDocument | None = LyricsDocument(
             "Test song", "Test artist", "A lyric with [literal brackets].\nAnother line.", (), "Test lyrics"
@@ -143,6 +149,26 @@ class FakeApplication:
     def restore_playlist(self, name: str) -> dict[str, Any]:
         self.up_next = list(self.saved[name])
         return {"restored": len(self.up_next)}
+
+    def playlist(self, name: str) -> Playlist:
+        return self.saved_sources.get(name, Playlist(name, tuple(self.saved[name]), "Saved queue"))
+
+    def import_playlist(self, link, name=None, *, progress=None, cancel=None) -> ImportResult:
+        self.calls.append(("import_playlist", link, name))
+        self.import_started.set()
+        if progress:
+            progress(1, 2, "Matching sample song")
+        if self.import_gate is not None:
+            self.import_gate.wait(3)
+        if cancel and cancel.is_set():
+            raise MyneError("Import cancelled.")
+        if self.import_error:
+            raise MyneError(self.import_error)
+        playlist = Playlist(name or "Imported songs", tuple(self.tracks), "Spotify", link,
+                            ("Spotify public view may be partial.",))
+        self.saved[playlist.name] = list(playlist.tracks)
+        self.saved_sources[playlist.name] = playlist
+        return ImportResult(playlist, len(self.tracks))
 
     def queue_remove(self, index: int, expected: Track) -> dict[str, Any]:
         assert self.up_next[index] == expected
@@ -741,7 +767,7 @@ def test_liked_library_recent_history_and_theme_survive_reopening() -> None:
     asyncio.run(scenario())
 
 
-def test_queue_toolbar_edits_and_saves_then_restores_named_queue() -> None:
+def test_queue_toolbar_edits_saves_and_opens_named_playlist_without_changing_queue() -> None:
     async def scenario() -> None:
         service = FakeApplication()
         first, second = service.tracks
@@ -765,6 +791,11 @@ def test_queue_toolbar_edits_and_saves_then_restores_named_queue() -> None:
             await pilot.click("#tab-playlists")
             await settle(app)
             await pilot.press("enter")
+            await settle(app)
+            assert app._open_playlist.name == "Evening [live]"
+            assert app.results == service.saved["Evening [live]"]
+            assert service.up_next == []
+            await pilot.click("#playlist-queue")
             await settle(app)
             assert service.up_next == service.saved["Evening [live]"]
             assert service.current is None
@@ -816,6 +847,125 @@ def test_studio_layout_keeps_player_visible_at_terminal_sizes(size: tuple[int, i
             await settle(app)
             assert app.query_one("#player").region.bottom <= size[1] - 1
             assert app.query_one("#stop").region.right <= size[0]
-            assert app.query_one("#sidebar").display is (size[0] >= 124)
+            assert app.query_one("#sidebar").display is (size[0] >= 100)
             assert app.query_one("#results").region.width >= 30
+    asyncio.run(scenario())
+
+
+def test_sidebar_can_toggle_on_small_terminal_and_open_saved_playlists() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.saved = {"My [playlist]": service.tracks}
+        service.up_next = [Track("queued", "Keep queued")]
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            assert not app.query_one("#sidebar").display
+            await pilot.press("ctrl+b")
+            assert app.query_one("#sidebar").display
+            assert not app.query_one("#queue-pane").display
+            assert app.query_one("#results").region.right <= 80
+            sidebar = app.query_one("#sidebar-playlists")
+            sidebar.focus()
+            await pilot.press("enter")
+            await settle(app)
+            assert app._open_playlist.name == "My [playlist]"
+            assert app.results == service.tracks
+            assert service.up_next == [Track("queued", "Keep queued")]
+            await pilot.press("ctrl+b")
+            assert app.query_one("#queue-pane").display
+            assert not app.query_one("#sidebar").display
+            await pilot.click("#playlist-queue")
+            await settle(app)
+            assert service.up_next == [Track("queued", "Keep queued"), *service.tracks]
+            await pilot.click("#playlist-play")
+            await settle(app)
+            assert service.current == service.tracks[0]
+    asyncio.run(scenario())
+
+
+def test_import_modal_saves_playlist_opens_tracks_and_keeps_playing_song() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.current = Track("current", "Keep playing")
+        service.up_next = [Track("queued", "Keep queued")]
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(app)
+            await pilot.press("ctrl+o")
+            app.screen.query_one("#import-link", Input).value = "https://open.spotify.com/playlist/" + "A" * 22
+            app.screen.query_one("#import-name", Input).value = "Night [drive]"
+            await pilot.click("#confirm-import")
+            await settle(app)
+            assert app._open_playlist.name == "Night [drive]"
+            assert app.results == service.tracks
+            assert app._sidebar_playlist_names == ["Night [drive]"]
+            assert service.current.title == "Keep playing"
+            assert service.up_next == [Track("queued", "Keep queued")]
+            app.action_playlist_info()
+            assert "https://open.spotify.com/playlist/" in app.screen.body
+            assert "partial" in app.screen.body
+    asyncio.run(scenario())
+
+
+def test_pasting_playlist_link_in_search_opens_import_flow() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            link = "https://music.youtube.com/playlist?list=PLsample"
+            app.query_one("#search", Input).value = link
+            await pilot.press("enter")
+            assert app.screen.query_one("#import-link", Input).value == link
+            assert not any(call[0] == "search" for call in service.calls)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is app._main_screen
+    asyncio.run(scenario())
+
+
+def test_import_errors_keep_modal_usable_and_do_not_mutate_playlists() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.import_error = "Private playlist. Use a public link."
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            app.action_import_playlist()
+            await pilot.pause()
+            app.screen.query_one("#import-link", Input).value = "https://example.com/invalid"
+            await pilot.click("#confirm-import")
+            assert not service.import_started.is_set()
+            app.screen.query_one("#import-link", Input).value = "https://open.spotify.com/playlist/" + "A" * 22
+            app.screen.query_one("#import-link", Input).focus()
+            await pilot.press("enter")
+            await settle(app)
+            assert "Private playlist" in str(app.screen.query_one("#import-status", Static).render())
+            assert not app.screen.query_one("#import-link", Input).disabled
+            assert not service.saved
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is app._main_screen
+    asyncio.run(scenario())
+
+
+def test_import_can_cancel_while_matching_without_saving() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.import_gate = threading.Event()
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            app.action_import_playlist()
+            await pilot.pause()
+            app.screen.query_one("#import-link", Input).value = "https://soundcloud.com/artist/sets/night"
+            await pilot.click("#confirm-import")
+            await asyncio.to_thread(service.import_started.wait, 1)
+            assert "Matching" in str(app.screen.query_one("#import-status", Static).render())
+            await pilot.press("escape")
+            service.import_gate.set()
+            await settle(app)
+            assert app.screen is app._main_screen
+            assert not service.saved
     asyncio.run(scenario())
