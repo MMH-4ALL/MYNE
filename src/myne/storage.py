@@ -2,6 +2,7 @@
 
 import json
 import math
+import random
 import sqlite3
 from collections import Counter
 from contextlib import contextmanager
@@ -24,6 +25,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS queue (position INTEGER PRIMARY KEY, track TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS snapshots (name TEXT PRIMARY KEY, tracks TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS favorites (
+                    provider TEXT NOT NULL, id TEXT NOT NULL, track TEXT NOT NULL,
+                    PRIMARY KEY(provider,id)
+                );
                 CREATE TABLE IF NOT EXISTS history (
                     id INTEGER PRIMARY KEY, track TEXT NOT NULL, seconds REAL NOT NULL,
                     completed INTEGER NOT NULL, played_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -121,15 +126,44 @@ class Store:
         with self._connect(True) as db:
             db.execute("DELETE FROM queue")
 
-    def remove(self, index: int) -> Track:
+    def remove(self, index: int, expected: Track | None = None) -> Track:
         with self._connect(True) as db:
             row = db.execute(
                 "SELECT position,track FROM queue ORDER BY position LIMIT 1 OFFSET ?", (max(0, index),)
             ).fetchone()
             if index < 0 or row is None:
                 raise MyneError("Queue position is out of range.")
+            if expected is not None and Track.from_dict(json.loads(row[1])) != expected:
+                raise MyneError("The queue changed. Refresh it and select the track again.")
             db.execute("DELETE FROM queue WHERE position=?", (row[0],))
             return Track.from_dict(json.loads(row[1]))
+
+    @staticmethod
+    def _replace_queue(db: sqlite3.Connection, tracks: list[Track]) -> None:
+        db.execute("DELETE FROM queue")
+        db.executemany(
+            "INSERT INTO queue(position,track) VALUES (?,?)",
+            ((index, Store._dump(track)) for index, track in enumerate(tracks)),
+        )
+
+    def move(self, index: int, step: int, expected: Track) -> int:
+        if step not in (-1, 1):
+            raise MyneError("Move a queued track one place up or down.")
+        with self._connect(True) as db:
+            tracks = self._queue(db)
+            if not 0 <= index < len(tracks) or tracks[index] != expected:
+                raise MyneError("The queue changed. Refresh it and select the track again.")
+            target = max(0, min(len(tracks) - 1, index + step))
+            tracks[index], tracks[target] = tracks[target], tracks[index]
+            self._replace_queue(db, tracks)
+            return target
+
+    def shuffle_queue(self) -> int:
+        with self._connect(True) as db:
+            tracks = self._queue(db)
+            random.SystemRandom().shuffle(tracks)
+            self._replace_queue(db, tracks)
+            return len(tracks)
 
     def skip_to(self, index: int, expected: Track) -> None:
         """Select an existing queue entry without copying its remaining tracks.
@@ -170,6 +204,42 @@ class Store:
     def snapshots(self) -> list[str]:
         with self._connect() as db:
             return [r[0] for r in db.execute("SELECT name FROM snapshots ORDER BY name")]
+
+    def playlists(self) -> list[tuple[str, int]]:
+        with self._connect() as db:
+            return [
+                (name, len(json.loads(tracks)))
+                for name, tracks in db.execute("SELECT name,tracks FROM snapshots ORDER BY name")
+            ]
+
+    def favorites(self) -> list[Track]:
+        with self._connect() as db:
+            return [Track.from_dict(json.loads(row[0])) for row in db.execute(
+                "SELECT track FROM favorites ORDER BY rowid DESC"
+            )]
+
+    def toggle_favorite(self, track: Track) -> bool:
+        with self._connect(True) as db:
+            key = (track.provider, track.id)
+            if db.execute("SELECT 1 FROM favorites WHERE provider=? AND id=?", key).fetchone():
+                db.execute("DELETE FROM favorites WHERE provider=? AND id=?", key)
+                return False
+            db.execute("INSERT INTO favorites(provider,id,track) VALUES (?,?,?)", (*key, self._dump(track)))
+            return True
+
+    def recent_tracks(self, limit: int = 50) -> list[Track]:
+        seen: set[tuple[str, str]] = set()
+        result: list[Track] = []
+        with self._connect() as db:
+            for (raw,) in db.execute("SELECT track FROM history ORDER BY id DESC LIMIT 1000"):
+                track = Track.from_dict(json.loads(raw))
+                key = (track.provider, track.id)
+                if key not in seen:
+                    seen.add(key)
+                    result.append(track)
+                    if len(result) >= limit:
+                        break
+        return result
 
     def set_setting(self, key: str, value: Any) -> None:
         with self._connect(True) as db:

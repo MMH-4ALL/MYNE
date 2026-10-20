@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+- A new Studio workspace with a library rail on wide terminals, compact view
+  tabs, a persistent player dock, and Studio / Midnight / Ember themes.
+- A searchable Ctrl+K command palette for library, playback, appearance and
+  queue actions. All controls also have keyboard shortcuts and tooltips.
+- Liked tracks persist in SQLite, with a separate recently played view drawn
+  from committed listening history. Theme selection survives UI restarts.
+- Save named upcoming queues in the UI, browse them and restore them without
+  interrupting the current song or automatically starting playback.
+- Queue reorder/remove/shuffle controls with stale-selection protection and
+  transactions that preserve duplicate tracks and the current song.
+- Repeat off/all/one with persisted settings and tested natural-end/manual-skip
+  behavior. Radio turns repeat off; enabling repeat leaves radio mode.
+- Ten-second rewind/forward controls, visible mute/output state, a Stop control,
+  and improved empty/loading states. The compact layout supports 80×24 terminals.
+- The terminal UI now requires Textual 6.12 or newer within the 6.x series.
+
 ## 0.2.2
 
 - Visible volume, mute/unmute controls and output status in the TUI. Use `[` / `]`

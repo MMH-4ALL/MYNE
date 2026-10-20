@@ -1,5 +1,20 @@
 # Validation record
 
+## Version 0.3.0 Studio workspace
+
+Validated locally on 20 October 2026 with **253 passing tests** on Python 3.12.14,
+two real-mpv skips and five filesystem Unix-socket cases excluded for the local
+restriction described below. Ruff and mypy pass across 26 application modules.
+New regressions cover favorite persistence/provider identity, recent-history
+ordering, stale queue edits, shuffle preservation, repeat modes, the command
+palette, named queue save/restore, seek/stop controls, and theme restoration.
+
+The real Textual interface was rendered and visually checked at 80×24 and
+144×42, including Studio, Midnight and Ember palettes. The README image uses
+explicitly labelled sample metadata, original sample lyrics, and demo telemetry.
+It is a screenshot of the actual UI and does not demonstrate audible playback.
+UI tests also exercise the intermediate 100×30 layout.
+
 ## Version 0.2.2 queue and recovery fixes
 
 The follow-up sound-controls update completed **239 local tests** with two

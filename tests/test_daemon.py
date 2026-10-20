@@ -149,6 +149,45 @@ def test_end_file_advances_durable_queue(player: tuple) -> None:
     assert store.stats()["plays"] == 1
 
 
+@pytest.mark.parametrize("mode,expected,pending", [("one", "a", ["b"]), ("all", "b", ["a"])])
+def test_repeat_applies_only_to_natural_completion(player: tuple, mode: str, expected: str, pending: list) -> None:
+    service, store, engine, _, clock = player
+    first, second = Track("a", "First"), Track("b", "Second")
+    service.dispatch("play", tracks=[first.to_dict(), second.to_dict()])
+    service.dispatch("repeat", value=mode)
+    assert store.get_setting("repeat") == mode
+    clock[0] = 40
+    engine.events.append({"event": "end-file", "reason": "eof"})
+    service.tick()
+    assert service.now()["track"]["id"] == expected
+    assert [track.id for track in store.queue()] == pending
+    assert store.stats()["listening_seconds"] == 40
+    if mode == "one":
+        assert service.dispatch("next")["track"]["id"] == "b"
+
+
+def test_repeat_cycles_and_radio_disables_it(player: tuple) -> None:
+    service, store, *_ = player
+    assert service.dispatch("repeat")["repeat"] == "all"
+    assert service.dispatch("repeat")["repeat"] == "one"
+    assert service.dispatch("repeat")["repeat"] == "off"
+    with pytest.raises(PlaybackError, match="Repeat mode"):
+        service.dispatch("repeat", value="bad")
+    service.dispatch("repeat", value="all")
+    service.dispatch("radio", seed=Track("a", "Seed").to_dict())
+    assert service.now()["repeat"] == "off"
+    assert store.get_setting("repeat") == "off"
+
+
+def test_repeat_all_keeps_a_manually_skipped_track_at_the_end(player: tuple) -> None:
+    service, store, *_ = player
+    first, second = Track("a", "First"), Track("b", "Second")
+    service.dispatch("play", tracks=[first.to_dict(), second.to_dict()])
+    service.dispatch("repeat", value="all")
+    assert service.dispatch("next")["track"]["id"] == "b"
+    assert store.queue() == [first]
+
+
 def test_listening_time_excludes_pause_and_seek(player: tuple) -> None:
     service, store, _, _, clock = player
     service.dispatch("play", tracks=[Track("a", "Track", duration=200).to_dict()])

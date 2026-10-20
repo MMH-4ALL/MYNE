@@ -96,6 +96,43 @@ class Application:
     def queue(self) -> list[Track]:
         return self.store.queue()
 
+    def queue_remove(self, index: int, expected: Track) -> dict[str, Any]:
+        self.store.remove(index, expected)
+        return {"removed": 1}
+
+    def queue_move(self, index: int, step: int, expected: Track) -> dict[str, Any]:
+        return {"queue_index": self.store.move(index, step, expected)}
+
+    def queue_shuffle(self) -> dict[str, Any]:
+        return {"shuffled": self.store.shuffle_queue()}
+
+    def favorites(self) -> list[Track]:
+        return self.store.favorites()
+
+    def recent_tracks(self) -> list[Track]:
+        return self.store.recent_tracks()
+
+    def toggle_favorite(self, track: Track) -> bool:
+        return self.store.toggle_favorite(track)
+
+    def playlists(self) -> list[tuple[str, int]]:
+        return self.store.playlists()
+
+    def save_playlist(self, name: str) -> int:
+        if not name.strip() or len(name) > 80:
+            raise MyneError("Give the saved queue a name between 1 and 80 characters.")
+        return self.store.save_queue(name.strip())
+
+    def restore_playlist(self, name: str) -> dict[str, Any]:
+        return {"restored": self.store.restore_queue(name)}
+
+    def ui_theme(self) -> str:
+        value = self.store.get_setting("ui_theme", "myne-studio")
+        return value if isinstance(value, str) else "myne-studio"
+
+    def save_ui_theme(self, name: str) -> None:
+        self.store.set_setting("ui_theme", name)
+
     def now(self) -> dict[str, Any]:
         try:
             return self._live_player.request("now")
@@ -111,11 +148,12 @@ class Application:
                 "audio_output": None,
                 "audio_device": None,
                 "radio": False,
+                "repeat": self.store.get_setting("repeat", "off"),
                 "error": str(exc) if self.config.socket_path.exists() else None,
             }
 
     def control(self, action: str, **payload: Any) -> dict[str, Any]:
-        if action in {"resume", "volume", "mute"}:
+        if action in {"resume", "volume", "mute", "repeat"}:
             self.player.ensure_running()
         return self.player.request(action, **payload)
 

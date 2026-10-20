@@ -7,6 +7,7 @@ import threading
 import time
 from typing import Any
 
+import pytest
 from rich.text import Text
 from textual.widgets import DataTable, Input, Static
 
@@ -32,6 +33,11 @@ class FakeApplication:
         self.volume = 75
         self.muted = False
         self.audio_output: str | None = "pulse"
+        self.repeat = "off"
+        self.liked: list[Track] = []
+        self.recent: list[Track] = []
+        self.saved: dict[str, list[Track]] = {}
+        self.theme_name = "myne-studio"
         self.document: LyricsDocument | None = LyricsDocument(
             "Test song", "Test artist", "A lyric with [literal brackets].\nAnother line.", (), "Test lyrics"
         )
@@ -85,6 +91,7 @@ class FakeApplication:
             "muted": self.muted,
             "audio_output": self.audio_output,
             "radio": False,
+            "repeat": self.repeat,
             "error": None,
         }
 
@@ -98,7 +105,59 @@ class FakeApplication:
                 self.muted = False
         elif action == "mute":
             self.muted = payload.get("value", not self.muted)
+        elif action == "repeat":
+            modes = ("off", "all", "one")
+            self.repeat = modes[(modes.index(self.repeat) + 1) % 3]
+        elif action == "seek":
+            self.position += payload["seconds"]
+        elif action == "stop":
+            self.current = None
         return self.now()
+
+    def favorites(self) -> list[Track]:
+        return list(self.liked)
+
+    def toggle_favorite(self, track: Track) -> bool:
+        if track in self.liked:
+            self.liked.remove(track)
+            return False
+        self.liked.insert(0, track)
+        return True
+
+    def recent_tracks(self) -> list[Track]:
+        return list(self.recent)
+
+    def ui_theme(self) -> str:
+        return self.theme_name
+
+    def save_ui_theme(self, name: str) -> None:
+        self.theme_name = name
+
+    def playlists(self) -> list[tuple[str, int]]:
+        return [(name, len(tracks)) for name, tracks in sorted(self.saved.items())]
+
+    def save_playlist(self, name: str) -> int:
+        self.saved[name] = list(self.up_next)
+        return len(self.up_next)
+
+    def restore_playlist(self, name: str) -> dict[str, Any]:
+        self.up_next = list(self.saved[name])
+        return {"restored": len(self.up_next)}
+
+    def queue_remove(self, index: int, expected: Track) -> dict[str, Any]:
+        assert self.up_next[index] == expected
+        self.up_next.pop(index)
+        return {"removed": 1}
+
+    def queue_move(self, index: int, step: int, expected: Track) -> dict[str, Any]:
+        assert self.up_next[index] == expected
+        target = max(0, min(len(self.up_next) - 1, index + step))
+        self.up_next[index], self.up_next[target] = self.up_next[target], self.up_next[index]
+        return {"queue_index": target}
+
+    def queue_shuffle(self) -> dict[str, Any]:
+        self.up_next.reverse()
+        return {"shuffled": len(self.up_next)}
 
     def mix(self, mood: str, limit: int = 20, ai: bool = False) -> list[Track]:
         self.calls.append(("mix", mood, limit, ai))
@@ -509,7 +568,7 @@ def test_real_level_meter_pause_unavailable_and_toggle() -> None:
             await pilot.press("v")
             await settle(app)
             assert meter.display
-            assert app.query_one("#player").region.height == 11
+            assert app.query_one("#player").region.height == 10
             assert ("visualizer", True) in service.calls
 
     asyncio.run(scenario())
@@ -587,6 +646,8 @@ def test_animation_frames_do_not_repeat_telemetry_or_fabricate_history() -> None
         app = MyneApp(service, reduced_motion=False)  # type: ignore[arg-type]
         async with app.run_test(size=(80, 24)):
             await settle(app)
+            app._audio_poll_timer.pause()
+            await app.workers.wait_for_complete()
             count = service.levels_calls
             history = list(app._audio_history)
             for _ in range(60):
@@ -648,3 +709,113 @@ def test_reduced_motion_disables_envelopes_and_textual_effects(monkeypatch) -> N
     app = MyneApp(FakeApplication())  # type: ignore[arg-type]
     assert app.animation_level == "none"
     assert app._audio_motion.reduced_motion is True
+
+
+def test_liked_library_recent_history_and_theme_survive_reopening() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.recent = [service.tracks[1]]
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.search_music("Linkin Park")
+            await settle(app)
+            await pilot.press("f")
+            await settle(app)
+            assert service.liked == [service.tracks[0]]
+            await pilot.click("#tab-favorites")
+            await settle(app)
+            assert app.results == service.liked
+            await pilot.click("#tab-recent")
+            await settle(app)
+            assert app.results == service.recent
+            await pilot.click("#theme")
+            await settle(app)
+            assert service.theme_name == "myne-midnight"
+        reopened = MyneApp(service)  # type: ignore[arg-type]
+        async with reopened.run_test(size=(80, 24)):
+            await settle(reopened)
+            assert reopened.theme == "myne-midnight"
+            reopened.action_favorites()
+            await settle(reopened)
+            assert reopened.results == service.liked
+    asyncio.run(scenario())
+
+
+def test_queue_toolbar_edits_and_saves_then_restores_named_queue() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        first, second = service.tracks
+        service.up_next = [first, second, Track("last", "Last")]
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            app.query_one("#queue", DataTable).focus()
+            await pilot.press("alt+down")
+            await settle(app)
+            assert service.up_next[:2] == [second, first]
+            await pilot.click("#queue-remove")
+            await settle(app)
+            assert service.up_next == [second, Track("last", "Last")]
+            await pilot.click("#queue-save")
+            app.screen.query_one("#playlist-name", Input).value = "Evening [live]"
+            await pilot.press("enter")
+            await settle(app)
+            assert service.saved["Evening [live]"] == service.up_next
+            service.up_next = []
+            await pilot.click("#tab-playlists")
+            await settle(app)
+            await pilot.press("enter")
+            await settle(app)
+            assert service.up_next == service.saved["Evening [live]"]
+            assert service.current is None
+    asyncio.run(scenario())
+
+
+def test_command_palette_opens_and_executes_library_action() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.liked = [service.tracks[0]]
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(app)
+            await pilot.press("ctrl+k")
+            app.screen.query_one(Input).value = "Liked tracks"
+            await pilot.pause(0.3)
+            await pilot.press("enter")
+            await settle(app)
+            assert app._view == "favorites"
+            assert app.results == service.liked
+    asyncio.run(scenario())
+
+
+def test_seek_repeat_and_stop_controls_change_player_state() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.current = service.tracks[0]
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            await pilot.click("#seek-forward")
+            await settle(app)
+            assert service.position == 22.5
+            await pilot.click("#repeat")
+            await settle(app)
+            assert app._snapshot["repeat"] == "all"
+            await pilot.click("#stop")
+            await settle(app)
+            assert service.current is None
+            assert app.query_one("#seek-forward").disabled
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("size", [(80, 24), (100, 30), (144, 42)])
+def test_studio_layout_keeps_player_visible_at_terminal_sizes(size: tuple[int, int]) -> None:
+    async def scenario() -> None:
+        app = MyneApp(FakeApplication())  # type: ignore[arg-type]
+        async with app.run_test(size=size):
+            await settle(app)
+            assert app.query_one("#player").region.bottom <= size[1] - 1
+            assert app.query_one("#stop").region.right <= size[0]
+            assert app.query_one("#sidebar").display is (size[0] >= 124)
+            assert app.query_one("#results").region.width >= 30
+    asyncio.run(scenario())

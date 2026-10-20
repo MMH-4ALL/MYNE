@@ -1,0 +1,87 @@
+Screen { background: $background; color: $foreground; }
+#masthead { height: 2; padding: 0 2; background: $surface; }
+#brand { width: 1fr; height: 2; color: $primary; text-style: bold; }
+#header-right { width: 33; height: 2; }
+#session-state { height: 1; color: $text-muted; text-align: right; }
+#header-buttons { height: 1; align-horizontal: right; }
+#header-buttons Button {
+    width: 13; min-width: 8; height: 1; min-height: 1; border: none; padding: 0 1;
+    color: $primary; background: $surface;
+}
+#workspace { height: 1fr; min-height: 9; }
+#sidebar {
+    width: 20; padding: 1; background: $surface; border-right: solid $panel;
+    overflow-y: auto;
+}
+#sidebar .sidebar-label { height: 2; color: $text-muted; text-style: bold; }
+#sidebar .view-button, #sidebar .mood-button {
+    width: 100%; height: 2; min-height: 2; border: none; padding: 0 1;
+    content-align: left middle; background: $surface; color: $foreground;
+}
+#sidebar .selected { color: $primary; background: $primary 12%; text-style: bold; }
+#library-count { height: 4; margin-top: 1; color: $text-muted; }
+#rail-tip { height: auto; margin-top: 1; color: $text-muted; }
+#main { width: 1fr; }
+#search { margin: 0 1; height: 3; border: tall $panel; background: $surface; }
+#search:focus { border: tall $primary; }
+#view-tabs { height: 1; margin: 0 1; }
+#view-tabs Button {
+    width: 1fr; min-width: 10; height: 1; min-height: 1; border: none; padding: 0 1;
+    background: $surface; color: $text-muted;
+}
+#view-tabs .selected { background: $primary; color: $background; text-style: bold; }
+#status { height: 1; margin: 0 2; color: $text-muted; text-overflow: ellipsis; }
+#status.error { color: $error; }
+#library { height: 1fr; min-height: 4; margin: 0 1; }
+.pane { border: solid $panel; padding: 0; border-title-color: $primary; border-subtitle-color: $text-muted; }
+#results-pane { width: 2fr; min-width: 32; margin-right: 1; }
+#queue-pane { width: 1fr; min-width: 23; }
+#lyrics-pane { width: 2fr; min-width: 29; margin-left: 1; }
+#lyrics-scroll { height: 1fr; padding: 0 1; }
+#lyrics-body { height: auto; min-height: 1; }
+#lyrics-source { height: 1; color: $text-muted; padding: 0 1; text-overflow: ellipsis; }
+#library.compact-lyrics #results-pane, #library.compact-lyrics #queue-pane { display: none; }
+#library.compact-lyrics #lyrics-pane { width: 1fr; margin-left: 0; }
+DataTable { height: 1fr; background: $background; }
+DataTable > .datatable--header { background: $surface; color: $text-muted; }
+DataTable:focus > .datatable--cursor { background: $primary; color: $background; text-style: bold; }
+DataTable > .datatable--cursor { background: $panel; }
+.empty { height: 1; color: $text-muted; padding-left: 1; }
+#queue-tools { height: 1; align-horizontal: center; }
+#queue-tools Button {
+    height: 1; min-height: 1; min-width: 1; border: none; padding: 0; margin-right: 1;
+    background: $surface; color: $text-muted;
+}
+#queue-up, #queue-down { width: 1; }
+#queue-remove { width: 3; }
+#queue-shuffle { width: 7; }
+#queue-save { width: 4; margin-right: 0; }
+#player { height: 11; margin: 0 1; border: solid $panel; border-title-color: $primary; padding: 0 1; }
+#player.no-visualizer { height: 8; }
+#sound-controls { height: 1; }
+#sound-controls Button {
+    min-width: 3; width: 3; height: 1; min-height: 1; border: none; padding: 0;
+    background: $surface;
+}
+#sound-controls #mute { width: 8; margin: 0 1; }
+#sound-controls #repeat { width: 10; margin-right: 1; }
+#sound-controls #seek-back, #sound-controls #seek-forward { width: 6; }
+#volume-label { width: 14; height: 1; text-align: center; }
+#audio-output { width: 1fr; height: 1; color: $text-muted; text-overflow: ellipsis; }
+#audio-output.silent { color: $warning; }
+#audio-meter { height: 3; color: $text-muted; }
+#now { height: 1; text-style: bold; text-overflow: ellipsis; }
+#progress-row { height: 1; }
+#progress { width: 1fr; height: 1; padding: 0 1 0 0; }
+#time { width: 19; height: 1; text-align: right; color: $text-muted; }
+#transport { height: 3; align-horizontal: center; }
+#transport Button { min-width: 7; width: 1fr; height: 3; margin: 0 1 0 0; border: none; }
+#transport #play { background: $primary; color: $background; text-style: bold; }
+#transport #favorite { color: $primary; }
+Footer { background: $surface; }
+Screen.compact #player { height: 10; }
+Screen.compact #player.no-visualizer { height: 8; }
+Screen.compact #audio-meter { height: 2; }
+Button:focus { text-style: bold reverse; }
+DetailScreen { align: center middle; background: $background 85%; }
+DetailScreen > Vertical { background: $surface; border: solid $primary; }

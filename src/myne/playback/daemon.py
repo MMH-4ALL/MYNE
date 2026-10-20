@@ -50,6 +50,8 @@ class PlayerService:
             saved_volume if isinstance(saved_volume, int) and 0 <= saved_volume <= 100 else config.volume
         )
         self._muted = False
+        saved_repeat = self.store.get_setting("repeat", "off")
+        self._repeat = saved_repeat if saved_repeat in ("off", "all", "one") else "off"
         self.engine = engine or MpvEngine(
             config.mpv_socket_path, config.mpv_binary, self._volume, audio_output=config.audio_output
         )
@@ -198,6 +200,11 @@ class PlayerService:
                     else:
                         self._failures = 0
                     self._finish(ended.get("reason") == "eof", stop_engine=False)
+                    if ended.get("reason") == "eof" and ended_track is not None and self._radio_seed is None:
+                        if self._repeat == "one":
+                            self.store.enqueue([ended_track], front=True)
+                        elif self._repeat == "all":
+                            self.store.enqueue([ended_track])
                     if self._failures >= 3:
                         self._auto = False
                         if ended_track is not None:
@@ -241,6 +248,7 @@ class PlayerService:
         state.update(
             track=self._active.to_dict() if self._active else None,
             radio=self._radio_seed is not None,
+            repeat=self._repeat,
             error=self._error,
         )
         return state
@@ -359,7 +367,10 @@ class PlayerService:
                 self._counting = not value and bool(self.engine.snapshot()["playing"])
                 return self.now()
             if action == "next":
+                skipped = self._active
                 self._finish(False)
+                if skipped is not None and self._repeat == "all" and self._radio_seed is None:
+                    self.store.enqueue([skipped])
                 self._error = None
                 self._failures = 0
                 self._auto = True
@@ -397,6 +408,16 @@ class PlayerService:
                 self.engine.set_mute(value)
                 self._muted = value
                 return self.now()
+            if action == "repeat":
+                modes = ("off", "all", "one")
+                value = payload.get("value", modes[(modes.index(self._repeat) + 1) % len(modes)])
+                if value not in modes:
+                    raise PlaybackError("Repeat mode must be off, all, or one.")
+                self._repeat = value
+                if value != "off":
+                    self._radio_seed = None
+                self.store.set_setting("repeat", value)
+                return self.now()
             if action == "seek":
                 if self._active is None:
                     raise PlaybackError("Nothing is playing.")
@@ -407,6 +428,8 @@ class PlayerService:
                 seed = seeds[0]
                 self._finish(False)
                 self._radio_seed = seed
+                self._repeat = "off"
+                self.store.set_setting("repeat", "off")
                 self._radio_last_seed = None
                 self._error = None
                 self._failures = 0

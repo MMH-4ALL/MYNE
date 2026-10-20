@@ -130,6 +130,24 @@ but cannot recover uncommitted listening seconds.
 
 ## TUI
 
+Version 0.3 adds a Studio workspace with a library rail on wide terminals and
+view tabs in compact terminals. Studio, Midnight and Ember themes keep a single
+accent throughout the workspace; `t` switches themes and saves your choice.
+
+- **Discover, Liked, Recent and Saved queues:** press `1`–`4` or use the visible
+  navigation. Favorites persist on this device. Recent tracks come from listening
+  segments recorded when a song ends, is skipped or is stopped.
+- **Command palette:** `Ctrl+K` opens searchable actions for the library, player,
+  themes, lyrics, statistics and queue snapshots.
+- **Queue tools:** move a selected queued track with `Alt+Up` / `Alt+Down`, remove
+  it with `Delete`, or shuffle upcoming tracks with `z`. The toolbar offers the
+  same actions and Save opens a named queue dialog. Enter on a saved queue
+  restores upcoming tracks while the current song continues.
+- **Player controls:** `,` / `.` seek ten seconds back/forward; `r` cycles repeat
+  off/all/one. Repeat persists across player restarts. Radio turns repeat off;
+  enabling repeat leaves radio mode. Manual Next bypasses repeat-one and moves
+  the skipped song to the end in repeat-all mode.
+
 `myne ui` opens the interface. Search, then select a result and press Enter to
 play or `a` to queue it. The on-screen footer lists transport/help shortcuts.
 The search field also accepts `/mix focus`, `/mix-ai night drive`, and
@@ -163,7 +181,7 @@ mpv builds without the FFmpeg `astats` filter can continue playing with the mete
 disabled. After upgrading an already-running service, run `myne shutdown` once
 and start playback again to load the new feature protocol.
 
-![Myne CLI TUI showing sample music metadata, search results, queue and playback controls](docs/tui.svg)
+![Myne Studio workspace showing sample music metadata, favorites, queue, lyrics and playback controls](docs/tui.svg)
 
 *Actual interface captured with sample fixture metadata; no live playback or listening history is shown.*
 

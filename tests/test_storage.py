@@ -92,3 +92,48 @@ def test_newer_database_schema_is_rejected_without_mutation(tmp_path):
         Store(path)
     with sqlite3.connect(path) as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == 99
+
+
+def test_favorites_persist_and_distinguish_providers(tmp_path):
+    from dataclasses import replace
+
+    store = Store(tmp_path / "db")
+    first = song(1)
+    other = replace(first, provider="local")
+    assert store.toggle_favorite(first) is True
+    assert store.toggle_favorite(other) is True
+    restarted = Store(store.database)
+    assert restarted.favorites() == [other, first]
+    assert restarted.toggle_favorite(first) is False
+    assert store.favorites() == [other]
+
+
+def test_recent_tracks_use_committed_listening_and_latest_unique_order(tmp_path):
+    store = Store(tmp_path / "db")
+    store.enqueue([song(1), song(2), song(1)])
+    assert store.recent_tracks() == []
+    for _ in range(3):
+        store.claim_next()
+        store.finish_current(15, False)
+    assert store.recent_tracks() == [song(1), song(2)]
+    assert store.stats()["listening_seconds"] == 45
+
+
+def test_queue_editing_preserves_duplicates_current_and_stale_guard(tmp_path, monkeypatch):
+    store = Store(tmp_path / "db")
+    store.enqueue([song(0), song(1), song(2), song(1)])
+    store.claim_next()
+    assert store.move(1, -1, song(2)) == 0
+    assert store.queue() == [song(2), song(1), song(1)]
+    with pytest.raises(MyneError, match="queue changed"):
+        store.remove(0, song(1))
+    with pytest.raises(MyneError, match="queue changed"):
+        store.move(0, 1, song(1))
+    assert store.current() == song(0)
+    monkeypatch.setattr("myne.storage.random.SystemRandom.shuffle", lambda _self, tracks: tracks.reverse())
+    assert store.shuffle_queue() == 3
+    assert store.queue() == [song(1), song(1), song(2)]
+    assert store.remove(0, song(1)) == song(1)
+    assert store.current() == song(0)
+    assert store.save_queue("Evening") == 2
+    assert store.playlists() == [("Evening", 2)]

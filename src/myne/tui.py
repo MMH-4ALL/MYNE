@@ -11,12 +11,12 @@ import math
 import re
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual import on, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import DescendantFocus, Resize
@@ -25,6 +25,8 @@ from textual.widgets import Button, DataTable, Footer, Input, ProgressBar, Stati
 
 from myne.models import Track
 from myne.motion import AudioMotion, reduced_motion_requested
+from myne.ui.screens import SaveQueueScreen
+from myne.ui.themes import THEME_NAMES, THEMES
 
 if TYPE_CHECKING:
     from myne.lyrics import LyricsDocument
@@ -80,7 +82,7 @@ def _level(value: object) -> float:
     return max(0.0, min(1.0, number)) if math.isfinite(number) else 0.0
 
 
-def _meter(rms: float, peak: float, width: int) -> Text:
+def _meter(rms: float, peak: float, width: int, accent: str = "#b7ed7e") -> Text:
     """Draw real RMS with a peak marker on a useful -60 to 0 dB scale."""
     # The daemon already maps -60..0 dBFS to 0..1; never logarithmize it twice.
     amount = _level(rms) * width
@@ -98,8 +100,8 @@ def _meter(rms: float, peak: float, width: int) -> Text:
             if index == filled and fraction
             else "░"
         )
-        color = "#ffa990" if index > width * 0.9 else "#62d6bf"
-        result.append(character, style=color if character != "░" else "#29404e")
+        color = "#edc17e" if index > width * 0.9 else accent
+        result.append(character, style=color if character != "░" else "dim")
     return result
 
 
@@ -108,12 +110,12 @@ class DetailScreen(ModalScreen[None]):
 
     BINDINGS = [Binding("escape", "dismiss", "Close"), Binding("q", "dismiss", "Close")]
     DEFAULT_CSS = """
-    DetailScreen { align: center middle; background: #070d12 85%; }
+    DetailScreen { align: center middle; background: $background 85%; }
     DetailScreen > Vertical {
         width: 78; max-width: 94%; height: 85%;
-        border: round #62d6bf; padding: 1 2; background: #111c25;
+        border: solid $primary; padding: 1 2; background: $surface;
     }
-    DetailScreen #detail-heading { height: 2; color: #62d6bf; text-style: bold; }
+    DetailScreen #detail-heading { height: 2; color: $primary; text-style: bold; }
     DetailScreen VerticalScroll { height: 1fr; }
     DetailScreen #detail-body { height: auto; }
     DetailScreen Button { width: 100%; margin-top: 1; }
@@ -141,49 +143,24 @@ class MyneApp(App[None]):
 
     TITLE = "Myne CLI"
     SUB_TITLE = "My Music. My Queue. My Experience."
-    ENABLE_COMMAND_PALETTE = False
-    CSS = """
-    Screen { background: #0b1219; color: #e7eef3; }
-    #brand { height: 2; padding: 0 1; color: #62d6bf; text-style: bold; }
-    #search { margin: 0 1; height: 3; border: tall #29404e; }
-    #search:focus { border: tall #62d6bf; }
-    #status { height: 1; margin: 0 2; color: #94a9b5; text-overflow: ellipsis; }
-    #status.error { color: #ffa990; }
-    #library { height: 1fr; min-height: 4; margin: 0 1; }
-    .pane { border: round #29404e; padding: 0; }
-    #results-pane { width: 2fr; min-width: 32; margin-right: 1; }
-    #queue-pane { width: 1fr; min-width: 23; }
-    #lyrics-pane { width: 2fr; min-width: 29; margin-left: 1; }
-    #lyrics-scroll { height: 1fr; padding: 0 1; }
-    #lyrics-body { height: auto; min-height: 1; }
-    #lyrics-source { height: 1; color: #94a9b5; padding: 0 1; text-overflow: ellipsis; }
-    #library.compact-lyrics #results-pane, #library.compact-lyrics #queue-pane { display: none; }
-    #library.compact-lyrics #lyrics-pane { width: 1fr; margin-left: 0; }
-    DataTable { height: 1fr; background: #0b1219; }
-    DataTable > .datatable--header { background: #172630; color: #94a9b5; }
-    DataTable:focus > .datatable--cursor { background: #62d6bf; color: #0b1219; }
-    DataTable > .datatable--cursor { background: #29404e; }
-    .empty { height: 1; color: #94a9b5; padding-left: 1; }
-    #player { height: 11; margin: 0 1; border: round #29404e; padding: 0 1; }
-    #player.no-visualizer { height: 8; }
-    #sound-controls { height: 1; }
-    #sound-controls Button { min-width: 3; width: 3; height: 1; min-height: 1; border: none; padding: 0; }
-    #sound-controls #mute { width: 8; margin: 0 1; }
-    #volume-label { width: 15; height: 1; text-align: center; }
-    #audio-output { width: 1fr; height: 1; color: #94a9b5; text-overflow: ellipsis; }
-    #audio-output.silent { color: #ffa990; }
-    #audio-meter { height: 3; color: #94a9b5; }
-    #now { height: 1; text-style: bold; text-overflow: ellipsis; }
-    #progress-row { height: 1; }
-    #progress { width: 1fr; height: 1; padding: 0 1 0 0; }
-    #time { width: 19; height: 1; text-align: right; color: #94a9b5; }
-    #transport { height: 3; align-horizontal: center; }
-    #transport Button { min-width: 9; width: 1fr; height: 3; margin: 0 1 0 0; }
-    #transport #play { background: #1f524b; }
-    Footer { background: #172630; }
-    """
+    ENABLE_COMMAND_PALETTE = True
+    CSS_PATH = "ui/myne.tcss"
     BINDINGS = [
         Binding("ctrl+f", "search_focus", "Search", priority=True),
+        Binding("ctrl+k", "command_palette", "Actions", priority=True),
+        Binding("1", "discover", "Discover", show=False),
+        Binding("2", "favorites", "Liked", show=False),
+        Binding("3", "recent", "Recent", show=False),
+        Binding("4", "playlists", "Saved queues", show=False),
+        Binding("f", "favorite", "Like", show=False),
+        Binding("r", "repeat", "Repeat", show=False),
+        Binding("z", "shuffle", "Shuffle", show=False),
+        Binding("t", "theme", "Theme", show=False),
+        Binding("comma", "seek_back", "−10s", show=False),
+        Binding("full_stop", "seek_forward", "+10s", show=False),
+        Binding("delete", "queue_remove", "Remove", show=False),
+        Binding("alt+up", "queue_up", "Move up", show=False),
+        Binding("alt+down", "queue_down", "Move down", show=False),
         Binding("a", "enqueue", "Add", show=False),
         Binding("p", "play", "Play", show=False),
         Binding("space", "toggle_pause", "Pause"),
@@ -192,7 +169,7 @@ class MyneApp(App[None]):
         Binding("]", "volume_up", "Volume +", show=False),
         Binding("m", "mute", "Mute", show=False),
         Binding("l", "lyrics", "Lyrics"),
-        Binding("v", "visualizer", "Visualizer"),
+        Binding("v", "visualizer", "Visualizer", show=False),
         Binding("s", "stats", "Stats", show=False),
         Binding("?", "help", "Help"),
         Binding("ctrl+q", "quit", "Exit", priority=True),
@@ -200,6 +177,14 @@ class MyneApp(App[None]):
 
     def __init__(self, application: Application, *, reduced_motion: bool | None = None) -> None:
         super().__init__()
+        for theme in THEMES:
+            self.register_theme(theme)
+        self.theme = THEME_NAMES[0]
+        self._theme_user_changed = False
+        self._view = "discover"
+        self._discover_results: list[Track] = []
+        self._favorites: set[tuple[str, str]] = set()
+        self._playlist_names: list[str] = []
         self._reduced_motion = reduced_motion_requested() if reduced_motion is None else reduced_motion
         if self._reduced_motion:
             self.animation_level = "none"
@@ -239,42 +224,76 @@ class MyneApp(App[None]):
         return self.screen_stack[0]
 
     def compose(self) -> ComposeResult:
-        yield Static("MYNE CLI\nMy Music. My Queue. My Experience.", id="brand", markup=False)
-        yield Input(placeholder="Search songs · /mix focus · /radio Numb", id="search")
-        yield Static("Search for your next track. Press ? for shortcuts.", id="status", markup=False)
-        with Horizontal(id="library"):
-            with Vertical(id="results-pane", classes="pane"):
-                yield DataTable(id="results", cursor_type="row", zebra_stripes=True)
-                yield Static(
-                    "Your next favorite starts here.", id="results-empty", classes="empty", markup=False
-                )
-            with Vertical(id="queue-pane", classes="pane"):
-                yield DataTable(id="queue", cursor_type="row")
-                yield Static("Queue is empty.", id="queue-empty", classes="empty", markup=False)
-            with Vertical(id="lyrics-pane", classes="pane"):
-                with VerticalScroll(id="lyrics-scroll", can_focus=True):
-                    yield Static("Play a track to load lyrics.", id="lyrics-body", markup=False)
-                yield Static("l · Show / hide lyrics", id="lyrics-source", markup=False)
+        with Horizontal(id="masthead"):
+            yield Static("M Y N E\nYOUR MUSIC. YOUR SPACE.", id="brand", markup=False)
+            with Vertical(id="header-right"):
+                yield Static("READY TO LISTEN", id="session-state", markup=False)
+                with Horizontal(id="header-buttons"):
+                    yield Button("Commands", id="commands", tooltip="Find any action · Ctrl+K")
+                    yield Button("Theme", id="theme", tooltip="Switch the color palette · t")
+        with Horizontal(id="workspace"):
+            with Vertical(id="sidebar"):
+                yield Static("YOUR LIBRARY", classes="sidebar-label")
+                for view, label in (("discover", "Discover"), ("favorites", "Liked tracks"),
+                                    ("recent", "Recent plays"), ("playlists", "Saved queues")):
+                    yield Button(label, id=f"rail-{view}", classes="view-button" + (" selected" if view == "discover" else ""))
+                yield Static("IN THE MOOD", classes="sidebar-label")
+                yield Button("Focus session", id="mood-focus", classes="mood-button")
+                yield Button("Night drive", id="mood-night", classes="mood-button")
+                yield Static("0 liked tracks\n0 in your queue", id="library-count", markup=False)
+                yield Static("Ctrl+K commands\n1–4 switch view", id="rail-tip", markup=False)
+            with Vertical(id="main"):
+                yield Input(placeholder="Find your next favorite · songs, artists, /mix focus", id="search")
+                with Horizontal(id="view-tabs"):
+                    for view, label in (("discover", "1 Discover"), ("favorites", "2 Liked"),
+                                        ("recent", "3 Recent"), ("playlists", "4 Saved queues")):
+                        yield Button(label, id=f"tab-{view}", classes="view-button" + (" selected" if view == "discover" else ""))
+                yield Static("Search for music or open your library. Ctrl+K finds every action.", id="status", markup=False)
+                with Horizontal(id="library"):
+                    with Vertical(id="results-pane", classes="pane"):
+                        yield DataTable(id="results", cursor_type="row", zebra_stripes=True)
+                        yield Static("A song, an artist, a mood. Start with a search.", id="results-empty", classes="empty", markup=False)
+                    with Vertical(id="queue-pane", classes="pane"):
+                        yield DataTable(id="queue", cursor_type="row")
+                        yield Static("Add tracks with a or + Queue.", id="queue-empty", classes="empty", markup=False)
+                        with Horizontal(id="queue-tools"):
+                            yield Button("↑", id="queue-up", tooltip="Move selected queued track up · Alt+Up")
+                            yield Button("↓", id="queue-down", tooltip="Move selected queued track down · Alt+Down")
+                            yield Button("Del", id="queue-remove", tooltip="Remove selected queued track · Delete")
+                            yield Button("Shuffle", id="queue-shuffle", tooltip="Shuffle upcoming tracks · z")
+                            yield Button("Save", id="queue-save", tooltip="Save this queue with a name")
+                    with Vertical(id="lyrics-pane", classes="pane"):
+                        with VerticalScroll(id="lyrics-scroll", can_focus=True):
+                            yield Static("Play a track to load lyrics.", id="lyrics-body", markup=False)
+                        yield Static("l · Show / hide lyrics", id="lyrics-source", markup=False)
         with Vertical(id="player"):
-            yield Static("Nothing playing · search to begin", id="now", markup=False)
+            yield Static("Your next listening session starts here.", id="now", markup=False)
             with Horizontal(id="progress-row"):
                 yield ProgressBar(total=100, show_eta=False, show_percentage=False, id="progress")
                 yield Static("0:00 / —:——", id="time", markup=False)
             yield Static("AUDIO LEVELS · waiting for playback…", id="audio-meter", markup=False)
             with Horizontal(id="sound-controls"):
+                yield Button("−10s", id="seek-back", tooltip="Seek back 10 seconds · ,", disabled=True)
+                yield Button("+10s", id="seek-forward", tooltip="Seek forward 10 seconds · .", disabled=True)
                 yield Button("−", id="volume-down", tooltip="Lower volume · [")
                 yield Static("Volume: —", id="volume-label", markup=False)
                 yield Button("+", id="volume-up", tooltip="Raise volume · ]")
                 yield Button("Mute", id="mute", tooltip="Mute / unmute · m")
+                yield Button("Loop: off", id="repeat", tooltip="Repeat off / all / one · r")
                 yield Static("Output: —", id="audio-output", markup=False)
             with Horizontal(id="transport"):
                 yield Button("▶ Play", id="play")
                 yield Button("+ Queue", id="add")
                 yield Button("Ⅱ Pause", id="pause")
                 yield Button("Next ›", id="next")
+                yield Button("♡ Like", id="favorite", tooltip="Like the selected track, or the current song · f")
+                yield Button("Stop", id="stop", disabled=True)
         yield Footer()
 
     def on_mount(self) -> None:
+        # Textual 6's CSS parser rejects zero line-pad; the style API accepts it.
+        for button in self._main_screen.query(Button):
+            button.styles.line_pad = 0
         self._main_screen.query_one("#results-pane").border_title = "DISCOVER"
         self._main_screen.query_one("#queue-pane").border_title = "MY QUEUE · 0"
         self._main_screen.query_one("#player").border_title = "NOW PLAYING"
@@ -284,10 +303,11 @@ class MyneApp(App[None]):
         self._main_screen.query_one("#search", Input).focus()
         self.refresh_playback()
         self.set_interval(1.0, self.refresh_playback)
-        self.set_interval(0.12, self.sample_audio)
+        self._audio_poll_timer = self.set_interval(0.12, self.sample_audio)
         self.set_interval(0.12 if self._reduced_motion else 1 / 30, self.tick_playback)
         self._layout_lyrics()
         self.configure_visualizer()
+        self.bootstrap_library()
 
     def on_resize(self, event: Resize) -> None:
         if self.screen_stack and self._main_screen.query("#lyrics-pane"):
@@ -301,7 +321,11 @@ class MyneApp(App[None]):
                 pass
 
     def _layout_lyrics(self) -> None:
-        wide = self.size.width >= 110
+        sidebar = self.size.width >= 124 and self.size.height >= 30
+        self._main_screen.query_one("#sidebar").display = sidebar
+        self._main_screen.query_one("#view-tabs").display = not sidebar
+        self._main_screen.set_class(self.size.height < 29, "compact")
+        wide = self.size.width - (20 if sidebar else 0) >= 110
         if not self._lyrics_user_toggled:
             self._lyrics_visible = wide
         pane = self._main_screen.query_one("#lyrics-pane")
@@ -319,6 +343,239 @@ class MyneApp(App[None]):
         widget.update(_plain(message))
         widget.set_class(error, "error")
 
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        commands = (
+            ("Search music", "Find a song or artist", self.action_search_focus),
+            ("Discover", "Return to your search results", self.action_discover),
+            ("Liked tracks", "Open your saved favorites", self.action_favorites),
+            ("Recently played", "Songs from your listening history", self.action_recent),
+            ("Saved queues", "Browse named queue snapshots", self.action_playlists),
+            ("Like / unlike track", "Save the selected track or current song", self.action_favorite),
+            ("Save queue", "Give the upcoming queue a name", self.action_save_playlist),
+            ("Shuffle queue", "Randomize upcoming tracks", self.action_shuffle),
+            ("Repeat mode", "Cycle off, all tracks, or one track", self.action_repeat),
+            ("Change theme", "Studio, Midnight, or Ember", self.action_theme),
+            ("Seek backward", "Rewind ten seconds", self.action_seek_back),
+            ("Seek forward", "Skip forward ten seconds", self.action_seek_forward),
+            ("Listening statistics", "Open your listening history summary", self.action_stats),
+            ("Lyrics", "Show or hide live lyrics", self.action_lyrics),
+            ("Visualizer", "Show or hide measured audio levels", self.action_visualizer),
+            ("Help", "All keyboard controls", self.action_help),
+            ("Quit", "Close the UI and keep music playing", self.action_quit),
+        )
+        for title, help_text, callback in commands:
+            yield SystemCommand(title, help_text, callback)
+
+    def _activate_view(self, view: str) -> None:
+        self._view = view
+        for button in self._main_screen.query(".view-button"):
+            button.set_class(button.id in {f"rail-{view}", f"tab-{view}"}, "selected")
+
+    def _render_tracks(self, tracks: list[Track]) -> None:
+        self.results = list(tracks)
+        self._playlist_names = []
+        self._selected_result = 0
+        table = self._main_screen.query_one("#results", DataTable)
+        table.clear(columns=True)
+        width = self._main_screen.query_one("#results-pane").size.width or 50
+        artist_width = max(6, width // 3 - 3)
+        table.add_column("Track", width=max(10, width - artist_width - 17))
+        table.add_column("Artist", width=artist_width)
+        table.add_column("Time", width=5)
+        table.add_column("♥", width=1)
+        for index, track in enumerate(tracks):
+            liked = (track.provider, track.id) in self._favorites
+            table.add_row(Text(_plain(track.title), no_wrap=True, overflow="ellipsis"),
+                          Text(_plain(", ".join(track.artists) or "Unknown"), no_wrap=True, overflow="ellipsis"),
+                          Text(_clock(track.duration)), Text("♥" if liked else "", style=self.current_theme.primary),
+                          key=str(index))
+        titles = {"discover": "DISCOVER", "favorites": "LIKED TRACKS", "recent": "RECENTLY PLAYED"}
+        self._main_screen.query_one("#results-pane").border_title = titles.get(self._view, "DISCOVER")
+        self._main_screen.query_one("#results-pane").border_subtitle = f"{len(tracks)} tracks · f to like"
+        empty = self._main_screen.query_one("#results-empty", Static)
+        empty.display = not bool(tracks)
+        messages = {"favorites": "Like a track with f to save it here.",
+                    "recent": "Played tracks appear after they end or stop.",
+                    "discover": "Search for a song, artist, or /mix mood."}
+        empty.update(messages.get(self._view, "Your library is empty."))
+        self._update_library_counts()
+        self._update_favorite_label()
+
+    def _update_library_counts(self) -> None:
+        self._main_screen.query_one("#library-count", Static).update(
+            f"{len(self._favorites)} liked tracks\n{len(self.queued)} upcoming\nStored locally"
+        )
+
+    def _update_favorite_label(self) -> None:
+        selected = self._selected()
+        data = self._snapshot.get("track")
+        track = selected[0] if selected else Track.from_dict(data) if data else None
+        liked = track is not None and (track.provider, track.id) in self._favorites
+        self._main_screen.query_one("#favorite", Button).label = "♥ Liked" if liked else "♡ Like"
+
+    @work(group="library-startup", exit_on_error=False)
+    async def bootstrap_library(self) -> None:
+        try:
+            favorites, theme = await asyncio.to_thread(lambda: (self.service.favorites(), self.service.ui_theme()))
+            self._favorites = {(track.provider, track.id) for track in favorites}
+            if theme in THEME_NAMES and not self._theme_user_changed:
+                self.theme = theme
+            if self._view == "discover":
+                self._render_tracks(self._discover_results)
+            self._update_library_counts()
+        except Exception as exc:
+            self._status(f"Library unavailable: {exc}", error=True)
+
+    def action_discover(self) -> None:
+        self._activate_view("discover")
+        self._render_tracks(self._discover_results)
+        self._status("Discover · search above, or Enter to play a result.")
+
+    def action_favorites(self) -> None:
+        self._activate_view("favorites")
+        self.load_library("favorites")
+
+    def action_recent(self) -> None:
+        self._activate_view("recent")
+        self.load_library("recent")
+
+    def action_playlists(self) -> None:
+        self._activate_view("playlists")
+        self.load_library("playlists")
+
+    @work(exclusive=True, group="library-view", exit_on_error=False)
+    async def load_library(self, view: str) -> None:
+        self._status("Opening your library…")
+        try:
+            if view == "playlists":
+                playlists = await asyncio.to_thread(self.service.playlists)
+                if self._view != view:
+                    return
+                self.results = []
+                self._playlist_names = [name for name, _count in playlists]
+                self._selected_result = 0
+                table = self._main_screen.query_one("#results", DataTable)
+                table.clear(columns=True)
+                table.add_columns("Saved queue", "Tracks")
+                for index, (name, count) in enumerate(playlists):
+                    table.add_row(Text(_plain(name)), str(count), key=str(index))
+                self._main_screen.query_one("#results-pane").border_title = "SAVED QUEUES"
+                self._main_screen.query_one("#results-pane").border_subtitle = "Enter to restore upcoming tracks"
+                empty = self._main_screen.query_one("#results-empty", Static)
+                empty.display = not bool(playlists)
+                empty.update("Use Save in the queue to create a snapshot.")
+                self._status(f"{len(playlists)} saved queues · Enter restores · Start begins playback")
+            else:
+                read = self.service.favorites if view == "favorites" else self.service.recent_tracks
+                tracks = await asyncio.to_thread(read)
+                if self._view != view:
+                    return
+                if view == "favorites":
+                    self._favorites = {(track.provider, track.id) for track in tracks}
+                self._render_tracks(tracks)
+                self._status(f"{len(tracks)} tracks · Enter plays · a queues · f likes")
+            self._selection_source = "results"
+            self._main_screen.query_one("#results", DataTable).focus()
+        except Exception as exc:
+            self._status(f"Could not open library: {exc}", error=True)
+
+    def action_favorite(self) -> None:
+        tracks = self._selected()
+        data = self._snapshot.get("track")
+        track = tracks[0] if tracks else Track.from_dict(data) if data else None
+        if track is None:
+            self._status("Select a track or play a song to like it.")
+            return
+        self.like_track(track)
+
+    @work(group="library-like", exit_on_error=False)
+    async def like_track(self, track: Track) -> None:
+        try:
+            async with self._mutation_lock:
+                liked = await asyncio.to_thread(self.service.toggle_favorite, track)
+            key = (track.provider, track.id)
+            if liked:
+                self._favorites.add(key)
+            else:
+                self._favorites.discard(key)
+            if self._view == "favorites":
+                self.load_library("favorites")
+            elif self._view != "playlists":
+                selected = self._selected_result
+                self._render_tracks(self.results)
+                if self.results:
+                    self._main_screen.query_one("#results", DataTable).move_cursor(row=selected)
+            self._update_library_counts()
+            self._status(f"{'Liked' if liked else 'Unliked'} · {track.title}")
+        except Exception as exc:
+            self._status(f"Could not save favorite: {exc}", error=True)
+
+    def action_theme(self) -> None:
+        self._theme_user_changed = True
+        index = THEME_NAMES.index(self.theme) if self.theme in THEME_NAMES else -1
+        self.theme = THEME_NAMES[(index + 1) % len(THEME_NAMES)]
+        self._audio_rendered = None
+        self._render_lyrics(force=True)
+        self._status(f"Theme · {self.theme.removeprefix('myne-').title()}")
+        self.persist_theme(self.theme)
+
+    @work(group="theme-save", exit_on_error=False)
+    async def persist_theme(self, name: str) -> None:
+        try:
+            await asyncio.to_thread(self.service.save_ui_theme, name)
+        except Exception as exc:
+            self._status(f"Could not save theme: {exc}", error=True)
+
+    def action_save_playlist(self) -> None:
+        if not self.queued:
+            self._status("Add upcoming tracks before saving a queue.")
+            return
+        self.push_screen(SaveQueueScreen(), self._save_playlist_named)
+
+    def _save_playlist_named(self, name: str | None) -> None:
+        if name is not None:
+            self.mutate(f"Saved queue · {name}", self.service.save_playlist, name)
+
+    def _restore_selected_playlist(self) -> None:
+        if 0 <= self._selected_result < len(self._playlist_names):
+            name = self._playlist_names[self._selected_result]
+            self.mutate(f"Restored · {name} · press Start to play", self.service.restore_playlist, name)
+
+    def _queue_target(self) -> Track | None:
+        if self._selection_source == "queue" and 0 <= self._selected_queue < len(self.queued):
+            return self.queued[self._selected_queue]
+        self._status("Select a track in your queue first.")
+        return None
+
+    def action_queue_remove(self) -> None:
+        if track := self._queue_target():
+            self.mutate("Removed from queue", self.service.queue_remove, self._selected_queue, track)
+
+    def action_queue_up(self) -> None:
+        self._move_queued(-1)
+
+    def action_queue_down(self) -> None:
+        self._move_queued(1)
+
+    def _move_queued(self, step: int) -> None:
+        if track := self._queue_target():
+            self.mutate("Queue updated", self.service.queue_move, self._selected_queue, step, track)
+
+    def action_shuffle(self) -> None:
+        self.mutate("Upcoming queue shuffled", self.service.queue_shuffle)
+
+    def action_repeat(self) -> None:
+        self.mutate("Repeat updated", self.service.control, "repeat")
+
+    def action_seek_back(self) -> None:
+        self.mutate("Rewound 10 seconds", lambda: self.service.control("seek", seconds=-10))
+
+    def action_seek_forward(self) -> None:
+        self.mutate("Skipped forward 10 seconds", lambda: self.service.control("seek", seconds=10))
+
+    def action_stop(self) -> None:
+        self.mutate("Playback stopped · upcoming queue saved", self.service.control, "stop")
+
     @on(Input.Submitted, "#search")
     def submit_search(self, event: Input.Submitted) -> None:
         query = event.value.strip()
@@ -331,6 +588,8 @@ class MyneApp(App[None]):
     async def search_music(self, query: str) -> None:
         """Cancelling a search discards its result without blocking the UI."""
         self._status("Searching…")
+        if not query.startswith("/radio "):
+            self._activate_view("discover")
         try:
             if query.startswith("/radio "):
                 seed = query.removeprefix("/radio ").strip()
@@ -354,31 +613,18 @@ class MyneApp(App[None]):
         except Exception as exc:
             self._status(f"Search failed: {exc}", error=True)
             return
-        self.results = list(tracks)
-        self._selected_result = 0
-        self._selection_source = "results"
-        table = self._main_screen.query_one("#results", DataTable)
-        table.clear()
-        for index, track in enumerate(self.results):
-            table.add_row(
-                Text(_plain(track.title)),
-                Text(_plain(", ".join(track.artists) or "Unknown artist")),
-                Text(_clock(track.duration)),
-                key=str(index),
-            )
-        # Border titles use Rich markup; untrusted moods are kept out of them.
-        self._main_screen.query_one("#results-pane").border_title = (
-            "SMART MIX" if heading.startswith("MIX") else "DISCOVER"
-        )
-        self._main_screen.query_one("#results-empty").display = not bool(self.results)
-        self._main_screen.query_one("#results-empty", Static).update("No tracks found. Try another search.")
+        self._discover_results = list(tracks)
+        if self._view != "discover":
+            return
+        self._render_tracks(self._discover_results)
+        if heading.startswith("MIX"):
+            self._main_screen.query_one("#results-pane").border_title = "SMART MIX"
         self._status(
-            f"{len(self.results)} tracks · Enter plays · a adds to queue"
-            if self.results
-            else "No tracks found. Try another search."
+            f"{len(self.results)} tracks · Enter plays · a queues · f likes"
+            if self.results else "No tracks found. Try another search."
         )
         if self.results:
-            table.focus()
+            self._main_screen.query_one("#results", DataTable).focus()
 
     @on(DataTable.RowHighlighted)
     def highlight_track(self, event: DataTable.RowHighlighted) -> None:
@@ -386,6 +632,7 @@ class MyneApp(App[None]):
             self._selected_result = event.cursor_row
         elif event.data_table.id == "queue":
             self._selected_queue = event.cursor_row
+        self._update_favorite_label()
 
     @on(DescendantFocus)
     def remember_selection_source(self, event: DescendantFocus) -> None:
@@ -417,6 +664,9 @@ class MyneApp(App[None]):
 
     def action_play(self) -> None:
         tracks = self._selected()
+        if self._view == "playlists" and self._selection_source != "queue":
+            self._restore_selected_playlist()
+            return
         if tracks:
             if self._selection_source == "queue":
                 self.mutate("Playing", self.service.play_queued, self._selected_queue, tracks[0])
@@ -450,7 +700,15 @@ class MyneApp(App[None]):
 
     @on(Button.Pressed)
     def press_transport(self, event: Button.Pressed) -> None:
-        actions: dict[str, Callable[[], None]] = {
+        button_id = event.button.id or ""
+        if button_id.startswith(("rail-", "tab-")):
+            view = button_id.split("-", 1)[1]
+            {"discover": self.action_discover, "favorites": self.action_favorites,
+             "recent": self.action_recent, "playlists": self.action_playlists}[view]()
+            return
+        if button_id.startswith("queue-"):
+            self._selection_source = "queue"
+        actions: dict[str, Callable[[], Any]] = {
             "play": self.action_play,
             "add": self.action_enqueue,
             "pause": self.action_toggle_pause,
@@ -458,6 +716,20 @@ class MyneApp(App[None]):
             "volume-down": self.action_volume_down,
             "volume-up": self.action_volume_up,
             "mute": self.action_mute,
+            "repeat": self.action_repeat,
+            "seek-back": self.action_seek_back,
+            "seek-forward": self.action_seek_forward,
+            "favorite": self.action_favorite,
+            "stop": self.action_stop,
+            "commands": self.action_command_palette,
+            "theme": self.action_theme,
+            "queue-up": self.action_queue_up,
+            "queue-down": self.action_queue_down,
+            "queue-remove": self.action_queue_remove,
+            "queue-shuffle": self.action_shuffle,
+            "queue-save": self.action_save_playlist,
+            "mood-focus": lambda: self.search_music("/mix focus"),
+            "mood-night": lambda: self.search_music("/mix night drive"),
         }
         if action := actions.get(event.button.id or ""):
             action()
@@ -467,6 +739,8 @@ class MyneApp(App[None]):
         try:
             async with self._mutation_lock:
                 result = await asyncio.to_thread(function, *args)
+            if isinstance(result, dict) and "queue_index" in result:
+                self._selected_queue = int(result["queue_index"])
             if isinstance(result, dict) and result.get("error"):
                 self._status(str(result["error"]), error=True)
             else:
@@ -504,6 +778,10 @@ class MyneApp(App[None]):
                     table.move_cursor(row=self._selected_queue)
             self._main_screen.query_one("#queue-empty").display = not bool(tracks)
             self._main_screen.query_one("#queue-pane").border_title = f"MY QUEUE · {len(tracks)}"
+            self._update_library_counts()
+            for button_id in ("queue-up", "queue-down", "queue-remove", "queue-save"):
+                self._main_screen.query_one(f"#{button_id}", Button).disabled = not bool(tracks)
+            self._main_screen.query_one("#queue-shuffle", Button).disabled = len(tracks) < 2
         except Exception as exc:
             self._status(f"Playback unavailable: {exc}", error=True)
         finally:
@@ -543,10 +821,17 @@ class MyneApp(App[None]):
         self._main_screen.query_one("#pause", Button).label = (
             "▶ Start" if not track else "▶ Resume" if snapshot.get("paused") else "Ⅱ Pause"
         )
+        repeat = snapshot.get("repeat", "off")
+        self._main_screen.query_one("#repeat", Button).label = f"Loop: {repeat}"
+        state = "MUTED" if muted or volume == 0 else "PAUSED" if snapshot.get("paused") else "PLAYING" if snapshot.get("playing") else "LOADING" if track else "READY"
+        self._main_screen.query_one("#session-state", Static).update(f"{state}  /  REPEAT {str(repeat).upper()}")
+        for button_id in ("stop", "seek-back", "seek-forward"):
+            self._main_screen.query_one(f"#{button_id}", Button).disabled = not bool(track)
         error = snapshot.get("error")
         if error and error != self._last_player_error:
             self._status(str(error), error=True)
         self._last_player_error = error
+        self._update_favorite_label()
 
     def _playback_position(self) -> float:
         position = float(self._snapshot.get("position") or 0)
@@ -702,17 +987,17 @@ class MyneApp(App[None]):
         for channel in range(min(2, len(rms))):
             value = _level(rms[channel])
             peak = _level(peaks[min(channel, len(peaks) - 1)])
-            rendered.append("L " if channel == 0 else "R ", style="#94a9b5")
-            rendered.append_text(_meter(value, peak, width))
+            rendered.append("L " if channel == 0 else "R ", style="dim")
+            rendered.append_text(_meter(value, peak, width, self.current_theme.primary))
             rendered.append(f" {value * 60 - 60:5.1f} dBFS" if value > 0 else " ≤−60 dBFS")
             rendered.append("\n")
         if len(rms) == 1:
-            rendered.append("MONO · actual mpv RMS / peak\n", style="#94a9b5")
+            rendered.append("MONO · actual mpv RMS / peak\n", style="dim")
         symbols = "▁▂▃▄▅▆▇█"
         history = list(self._audio_history)[-max(1, meter.size.width - 15) :]
-        rendered.append("RMS HISTORY  ", style="#94a9b5")
+        rendered.append("RMS HISTORY  ", style="dim")
         rendered.append(
-            "".join(symbols[min(7, round(_level(value) * 7))] for value in history), style="#62d6bf"
+            "".join(symbols[min(7, round(_level(value) * 7))] for value in history), style=self.current_theme.primary
         )
         show(rendered)
 
@@ -795,15 +1080,15 @@ class MyneApp(App[None]):
         elif document.synced:
             text = Text()
             for line_index, line in enumerate(document.synced):
-                text.append("› " if line_index == index else "  ", style="#62d6bf")
+                text.append("› " if line_index == index else "  ", style=self.current_theme.primary)
                 text.append(
                     _plain(line.text) or "♪",
                     style=(
-                        "bold #62d6bf"
+                        f"bold {self.current_theme.primary}"
                         if line_index == index
-                        else "#e7eef3"
+                        else ""
                         if line_index > index
-                        else "#94a9b5"
+                        else "dim"
                     ),
                 )
                 text.append("\n")
@@ -858,16 +1143,26 @@ class MyneApp(App[None]):
                 "My Music. My Queue. My Experience.\n\n"
                 "DISCOVER\n"
                 "Ctrl+F       Focus the search box\n"
+                "Ctrl+K       Search all actions in the command palette\n"
+                "1 / 2 / 3 / 4  Discover / Liked / Recent / Saved queues\n"
                 "Enter        Search; play a selected result or queue track\n"
                 "↑ / ↓        Select tracks\n"
                 "Tab          Move between panes and controls\n"
                 "p            Play the selected track\n"
                 "a            Add the selected track to your queue\n\n"
+                "f            Like / unlike a selected track or the current song\n"
+                "Delete       Remove the selected queued track\n"
+                "Alt+↑ / ↓    Move the selected queued track\n"
+                "z            Shuffle upcoming tracks\n"
+                "Save         Name the upcoming queue; Enter restores a saved queue\n\n"
                 "PLAYBACK\n"
                 "Space        Start queue / pause / resume\n"
                 "n            Next track\n"
                 "[ / ]        Lower / raise volume (raising also unmutes)\n"
                 "m            Mute / unmute\n"
+                ", / .        Seek backward / forward 10 seconds\n"
+                "r            Repeat off / all / one (radio turns repeat off)\n"
+                "t            Switch Studio / Midnight / Ember; saved locally\n"
                 "l            Show / hide live lyrics; timed lines follow playback\n"
                 "v            Show / hide the real stereo RMS / peak visualizer\n"
                 "s            Listening statistics\n\n"
