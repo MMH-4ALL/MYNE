@@ -4,7 +4,6 @@ import math
 import os
 import shutil
 import struct
-import sys
 import time
 import wave
 from pathlib import Path
@@ -70,11 +69,6 @@ def test_standalone_visualizer_closes_analysis_after_bounded_view(monkeypatch: p
 @pytest.mark.skipif(os.name == "nt" or not shutil.which("mpv"), reason="Requires real mpv and Unix IPC")
 def test_real_daemon_visualizer_tracks_pause_seek_and_stop(tmp_path: Path) -> None:
     binary = shutil.which("mpv")
-    wrapper = tmp_path / "mpv-null"
-    wrapper.write_text(
-        f"#!{sys.executable}\nimport os,sys\nos.execv({binary!r}, [{binary!r}, '--ao=null', *sys.argv[1:]])\n"
-    )
-    wrapper.chmod(0o700)
     audio = tmp_path / "Author - Test.wav"
     rate = 16000
     with wave.open(str(audio), "wb") as output:
@@ -87,7 +81,9 @@ def test_real_daemon_visualizer_tracks_pause_seek_and_stop(tmp_path: Path) -> No
                 for i in range(rate * 6)
             )
         )
-    config = Config(tmp_path / "data", tmp_path / "run", mpv_binary=str(wrapper), provider="local")
+    config = Config(
+        tmp_path / "data", tmp_path / "run", mpv_binary=str(binary), provider="local", audio_output="null"
+    )
     config.prepare()
     player = PlayerClient(config, timeout=5)
     try:
@@ -105,6 +101,10 @@ def test_real_daemon_visualizer_tracks_pause_seek_and_stop(tmp_path: Path) -> No
         assert levels["rms"][0] - levels["rms"][1] == pytest.approx(1 / 3, abs=0.02)
         assert levels["track_id"] == str(audio)
         assert levels["playing"] is True
+        assert player.request("now")["audio_output"] == "null"
+        assert player.request("mute", value=True)["muted"] is True
+        assert player.request("volume", value=60)["muted"] is False
+        assert player.request("volume", delta=-5)["volume"] == 55
         player.request("pause", value=True)
         assert player.request("levels")["rms"] == []
         player.request("seek", seconds=1)

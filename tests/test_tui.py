@@ -29,6 +29,9 @@ class FakeApplication:
         self.search_started = threading.Event()
         self.position = 12.5
         self.playing = True
+        self.volume = 75
+        self.muted = False
+        self.audio_output: str | None = "pulse"
         self.document: LyricsDocument | None = LyricsDocument(
             "Test song", "Test artist", "A lyric with [literal brackets].\nAnother line.", (), "Test lyrics"
         )
@@ -78,14 +81,23 @@ class FakeApplication:
             "position": self.position if self.current else 0,
             "playing": bool(self.current) and self.playing,
             "duration": self.current.duration if self.current else None,
-            "volume": 75,
+            "volume": self.volume,
+            "muted": self.muted,
+            "audio_output": self.audio_output,
             "radio": False,
             "error": None,
         }
 
     def control(self, action: str, **payload: Any) -> dict[str, Any]:
         self.calls.append(("control", action))
-        self.paused = action == "pause"
+        if action in {"pause", "resume"}:
+            self.paused = action == "pause"
+        elif action == "volume":
+            self.volume = max(0, min(100, payload.get("value", self.volume + payload.get("delta", 0))))
+            if self.volume:
+                self.muted = False
+        elif action == "mute":
+            self.muted = payload.get("value", not self.muted)
         return self.now()
 
     def mix(self, mood: str, limit: int = 20, ai: bool = False) -> list[Track]:
@@ -198,6 +210,49 @@ def test_space_starts_the_saved_queue_when_the_player_is_idle() -> None:
             await settle(app)
             assert ("control", "resume") in service.calls
             assert ("control", "pause") not in service.calls
+
+    asyncio.run(scenario())
+
+
+def test_sound_controls_recover_zero_volume_and_toggle_mute() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.current = service.tracks[0]
+        service.volume = 0
+        service.muted = True
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            assert "Muted" in str(app.query_one("#volume-label", Static).render())
+            app.query_one("#results", DataTable).focus()
+            await pilot.press("]")
+            await settle(app)
+            assert service.volume == 5
+            assert service.muted is False
+            assert "5%" in str(app.query_one("#volume-label", Static).render())
+            await pilot.click("#mute")
+            await settle(app)
+            assert service.muted is True
+            await pilot.click("#mute")
+            await settle(app)
+            assert service.muted is False
+
+    asyncio.run(scenario())
+
+
+def test_loading_and_silent_output_are_visible() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.current = service.tracks[0]
+        service.playing = False
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)):
+            await settle(app)
+            assert "Loading" in str(app.query_one("#now", Static).render())
+            service.playing = True
+            service.audio_output = "null"
+            app._show_playback(service.now())
+            assert "silent" in str(app.query_one("#audio-output", Static).render()).lower()
 
     asyncio.run(scenario())
 
@@ -449,12 +504,12 @@ def test_real_level_meter_pause_unavailable_and_toggle() -> None:
             await pilot.press("v")
             await settle(app)
             assert not meter.display
-            assert app.query_one("#player").region.height == 7
+            assert app.query_one("#player").region.height == 8
             assert ("visualizer", False) in service.calls
             await pilot.press("v")
             await settle(app)
             assert meter.display
-            assert app.query_one("#player").region.height == 10
+            assert app.query_one("#player").region.height == 11
             assert ("visualizer", True) in service.calls
 
     asyncio.run(scenario())

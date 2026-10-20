@@ -107,12 +107,15 @@ class Application:
                 "position": 0.0,
                 "duration": None,
                 "volume": self.config.volume,
+                "muted": False,
+                "audio_output": None,
+                "audio_device": None,
                 "radio": False,
                 "error": str(exc) if self.config.socket_path.exists() else None,
             }
 
     def control(self, action: str, **payload: Any) -> dict[str, Any]:
-        if action == "resume":
+        if action in {"resume", "volume", "mute"}:
             self.player.ensure_running()
         return self.player.request(action, **payload)
 

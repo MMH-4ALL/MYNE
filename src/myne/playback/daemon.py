@@ -49,7 +49,10 @@ class PlayerService:
         self._volume = (
             saved_volume if isinstance(saved_volume, int) and 0 <= saved_volume <= 100 else config.volume
         )
-        self.engine = engine or MpvEngine(config.mpv_socket_path, config.mpv_binary, self._volume)
+        self._muted = False
+        self.engine = engine or MpvEngine(
+            config.mpv_socket_path, config.mpv_binary, self._volume, audio_output=config.audio_output
+        )
         self.clock = clock
         self.lock = threading.RLock()
         self.shutdown_requested = False
@@ -229,6 +232,9 @@ class PlayerService:
             "paused": False,
             "playing": False,
             "volume": self._volume,
+            "muted": self._muted,
+            "audio_output": None,
+            "audio_device": None,
         }
         if self._active is not None:
             state.update(self.engine.snapshot())
@@ -366,16 +372,31 @@ class PlayerService:
                 self._auto = False
                 return self.now()
             if action == "volume":
-                value = self._number(payload.get("value"), "Volume")
+                if "value" in payload and "delta" in payload:
+                    raise PlaybackError("Provide a volume value or a relative change, not both.")
+                if "delta" in payload:
+                    value = max(0.0, min(100.0, self._volume + self._number(payload["delta"], "Volume change")))
+                else:
+                    value = self._number(payload.get("value"), "Volume")
                 if not 0 <= value <= 100:
                     raise PlaybackError("Volume must be between 0 and 100.")
                 self.engine.start()
                 self.engine.set_volume(round(value))
                 self._volume = round(value)
+                if self._volume > 0:
+                    self._muted = False
                 self.store.set_setting("volume", round(value))
                 result = self.now()
                 result["volume"] = round(value)
                 return result
+            if action == "mute":
+                value = payload.get("value", not self._muted)
+                if not isinstance(value, bool):
+                    raise PlaybackError("Mute value must be true or false.")
+                self.engine.start()
+                self.engine.set_mute(value)
+                self._muted = value
+                return self.now()
             if action == "seek":
                 if self._active is None:
                     raise PlaybackError("Nothing is playing.")

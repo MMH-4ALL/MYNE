@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from unittest.mock import Mock
 
 import pytest
 from typer.testing import CliRunner
@@ -48,6 +49,21 @@ def test_cli_validation_and_no_player_status(isolated):
     assert "Traceback" not in result.output
 
 
+def test_now_distinguishes_loading_from_playing_and_reports_silent_output(isolated, monkeypatch):
+    service = Mock()
+    service.now.return_value = {
+        "track": Track("a", "Track").to_dict(), "playing": False, "paused": False,
+        "muted": True, "volume": 0, "audio_output": "null", "position": 0,
+    }
+    monkeypatch.setattr("myne.cli.application", lambda _ctx: service)
+    result = isolated.invoke(app, ["now"])
+    assert result.exit_code == 0, result.output
+    assert "Loading" in result.output
+    assert "Playing" not in result.output
+    assert "muted" in result.output
+    assert "null (silent)" in result.output
+
+
 def test_cli_ai_needs_explicit_configuration(isolated, monkeypatch):
     monkeypatch.delenv("MYNE_MIX_ENDPOINT", raising=False)
     result = isolated.invoke(app, ["mix", "focus", "--ai"])
@@ -94,9 +110,10 @@ def test_global_data_dir_isolated_from_config(isolated, tmp_path):
 
 def test_config_roundtrip_and_volume_validation(isolated, monkeypatch):
     config = Config.from_env()
-    for key, value in replace(config, volume=42).to_env().items():
+    for key, value in replace(config, volume=42, audio_output="pulse").to_env().items():
         monkeypatch.setenv(key, value)
     assert Config.from_env().volume == 42
+    assert Config.from_env().audio_output == "pulse"
     monkeypatch.setenv("MYNE_VOLUME", "loud")
     with pytest.raises(MyneError):
         Config.from_env()

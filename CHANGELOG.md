@@ -2,6 +2,11 @@
 
 ## 0.2.2
 
+- Visible volume, mute/unmute controls and output status in the TUI. Use `[` / `]`
+  for volume and `m` for mute; raising the volume also unmutes the player.
+- `myne mute` / `myne unmute`, volume adjustment while idle, and mute/output
+  diagnostics in `myne now` / `myne --json now`. Loading tracks no longer appear
+  as already playing. An optional `MYNE_AUDIO_OUTPUT` selects an mpv output driver.
 - Playing an existing queue selection now skips to that entry without copying
   the queue tail or creating duplicate playback. Stale selections are rejected
   before interrupting the current song or changing the queue.

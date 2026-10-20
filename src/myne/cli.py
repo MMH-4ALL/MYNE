@@ -254,12 +254,17 @@ def now(ctx: typer.Context) -> None:
     track = status.get("track")
     label = (
         (
-            f"{'Paused' if status.get('paused') else 'Playing'} · {track['title']}\n"
+            f"{'Paused' if status.get('paused') else 'Playing' if status.get('playing') else 'Loading'} · {track['title']}\n"
             f"{duration(status.get('position'))} / {duration(status.get('duration'))} · Volume {status.get('volume', 70):g}%"
         )
         if track
         else "Nothing is playing."
     )
+    if status.get("muted"):
+        label += "\nSound is muted. Run myne unmute or raise the volume."
+    if status.get("audio_output"):
+        output = str(status["audio_output"])
+        label += f"\nAudio output: {output}" + (" (silent)" if output == "null" else "")
     if status.get("error"):
         label += f"\n{status['error']}"
     emit(ctx, status, label)
@@ -507,6 +512,21 @@ def seek(ctx: typer.Context, seconds: float) -> None:
 @handled
 def volume(ctx: typer.Context, value: int = typer.Argument(..., min=0, max=100)) -> None:
     emit(ctx, application(ctx).control("volume", value=value), f"Volume · {value}%")
+
+
+@app.command()
+@handled
+def mute(ctx: typer.Context) -> None:
+    """Toggle sound mute without pausing the song."""
+    result = application(ctx).control("mute")
+    emit(ctx, result, "Sound muted." if result.get("muted") else "Sound unmuted.")
+
+
+@app.command()
+@handled
+def unmute(ctx: typer.Context) -> None:
+    """Unmute the shared player. A zero volume still needs to be raised."""
+    emit(ctx, application(ctx).control("mute", value=False), "Sound unmuted.")
 
 
 @app.command()

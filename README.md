@@ -87,6 +87,8 @@ myne next
 myne seek 15
 myne seek -- -10
 myne volume 60
+myne mute                          # toggle sound mute
+myne unmute                        # keep the current volume, clear mute
 myne stop                           # retains upcoming tracks
 myne now
 myne lyrics
@@ -141,6 +143,11 @@ Playing a selected queue entry skips the entries before it and continues through
 the existing tail once. If another client changes the selected entry first, Myne
 asks you to refresh and select it again. Space or the Start control begins the
 saved queue when nothing is playing, then pauses/resumes active playback.
+The sound row shows volume, mute and the current audio output. Click − / + or
+press `[` / `]` to adjust volume; click Mute/Unmute or press `m` to toggle sound.
+Raising the volume also unmutes. Loading tracks are labelled until playback
+starts, and a `null` output is explicitly marked silent. `myne --json now`
+includes the mute state, output driver and configured audio-device selector.
 
 Meters render smoothly at 30 FPS with eased attack/release, peak hold, and
 fractional block edges. Audio is polled separately at a bounded rate, so smoother

@@ -164,8 +164,14 @@ class MyneApp(App[None]):
     DataTable:focus > .datatable--cursor { background: #62d6bf; color: #0b1219; }
     DataTable > .datatable--cursor { background: #29404e; }
     .empty { height: 1; color: #94a9b5; padding-left: 1; }
-    #player { height: 10; margin: 0 1; border: round #29404e; padding: 0 1; }
-    #player.no-visualizer { height: 7; }
+    #player { height: 11; margin: 0 1; border: round #29404e; padding: 0 1; }
+    #player.no-visualizer { height: 8; }
+    #sound-controls { height: 1; }
+    #sound-controls Button { min-width: 3; width: 3; height: 1; min-height: 1; border: none; padding: 0; }
+    #sound-controls #mute { width: 8; margin: 0 1; }
+    #volume-label { width: 15; height: 1; text-align: center; }
+    #audio-output { width: 1fr; height: 1; color: #94a9b5; text-overflow: ellipsis; }
+    #audio-output.silent { color: #ffa990; }
     #audio-meter { height: 3; color: #94a9b5; }
     #now { height: 1; text-style: bold; text-overflow: ellipsis; }
     #progress-row { height: 1; }
@@ -182,6 +188,9 @@ class MyneApp(App[None]):
         Binding("p", "play", "Play", show=False),
         Binding("space", "toggle_pause", "Pause"),
         Binding("n", "next", "Next", show=False),
+        Binding("[", "volume_down", "Volume −", show=False),
+        Binding("]", "volume_up", "Volume +", show=False),
+        Binding("m", "mute", "Mute", show=False),
         Binding("l", "lyrics", "Lyrics"),
         Binding("v", "visualizer", "Visualizer"),
         Binding("s", "stats", "Stats", show=False),
@@ -252,6 +261,12 @@ class MyneApp(App[None]):
                 yield ProgressBar(total=100, show_eta=False, show_percentage=False, id="progress")
                 yield Static("0:00 / —:——", id="time", markup=False)
             yield Static("AUDIO LEVELS · waiting for playback…", id="audio-meter", markup=False)
+            with Horizontal(id="sound-controls"):
+                yield Button("−", id="volume-down", tooltip="Lower volume · [")
+                yield Static("Volume: —", id="volume-label", markup=False)
+                yield Button("+", id="volume-up", tooltip="Raise volume · ]")
+                yield Button("Mute", id="mute", tooltip="Mute / unmute · m")
+                yield Static("Output: —", id="audio-output", markup=False)
             with Horizontal(id="transport"):
                 yield Button("▶ Play", id="play")
                 yield Button("+ Queue", id="add")
@@ -424,6 +439,15 @@ class MyneApp(App[None]):
     def action_next(self) -> None:
         self.mutate("Skipped to next track", self.service.control, "next")
 
+    def action_volume_down(self) -> None:
+        self.mutate("Volume lowered", lambda: self.service.control("volume", delta=-5))
+
+    def action_volume_up(self) -> None:
+        self.mutate("Volume raised", lambda: self.service.control("volume", delta=5))
+
+    def action_mute(self) -> None:
+        self.mutate("Sound updated", self.service.control, "mute")
+
     @on(Button.Pressed)
     def press_transport(self, event: Button.Pressed) -> None:
         actions: dict[str, Callable[[], None]] = {
@@ -431,6 +455,9 @@ class MyneApp(App[None]):
             "add": self.action_enqueue,
             "pause": self.action_toggle_pause,
             "next": self.action_next,
+            "volume-down": self.action_volume_down,
+            "volume-up": self.action_volume_up,
+            "mute": self.action_mute,
         }
         if action := actions.get(event.button.id or ""):
             action()
@@ -443,6 +470,10 @@ class MyneApp(App[None]):
             if isinstance(result, dict) and result.get("error"):
                 self._status(str(result["error"]), error=True)
             else:
+                if isinstance(result, dict) and "track" in result:
+                    self._show_playback(result)
+                    if message == "Playing" and not result.get("playing") and not result.get("paused"):
+                        message = "Loading audio…"
                 self._status(message)
         except Exception as exc:
             self._status(f"Playback unavailable: {exc}", error=True)
@@ -487,13 +518,26 @@ class MyneApp(App[None]):
         track = snapshot.get("track")
         if track:
             artists = ", ".join(track.get("artists") or ())
-            state = "Ⅱ" if snapshot.get("paused") else "▶"
+            state = "Ⅱ" if snapshot.get("paused") else "▶" if snapshot.get("playing") else "Loading ·"
             radio = " · RADIO" if snapshot.get("radio") else ""
             self._main_screen.query_one("#now", Static).update(
                 _plain(f"{state} {track.get('title', 'Unknown track')} · {artists}{radio}")
             )
         else:
             self._main_screen.query_one("#now", Static).update("Nothing playing · search to begin")
+        volume = snapshot.get("volume", 70)
+        muted = snapshot.get("muted", False)
+        self._main_screen.query_one("#volume-label", Static).update(
+            f"Muted · {volume:g}%" if muted else f"Volume: {volume:g}%"
+        )
+        self._main_screen.query_one("#mute", Button).label = "Unmute" if muted else "Mute"
+        raw_output = snapshot.get("audio_output")
+        output = raw_output if isinstance(raw_output, str) else ""
+        outputs = {"pulse": "PulseAudio", "pipewire": "PipeWire", "coreaudio": "CoreAudio", "alsa": "ALSA"}
+        output_label = "silent (null)" if output == "null" else outputs.get(output, output or "—")
+        output_widget = self._main_screen.query_one("#audio-output", Static)
+        output_widget.update(_plain(f"Output: {output_label}"))
+        output_widget.set_class(output == "null" or muted or volume == 0, "silent")
         self._sync_lyrics_track(track)
         self.tick_playback()
         self._main_screen.query_one("#pause", Button).label = (
@@ -822,6 +866,8 @@ class MyneApp(App[None]):
                 "PLAYBACK\n"
                 "Space        Start queue / pause / resume\n"
                 "n            Next track\n"
+                "[ / ]        Lower / raise volume (raising also unmutes)\n"
+                "m            Mute / unmute\n"
                 "l            Show / hide live lyrics; timed lines follow playback\n"
                 "v            Show / hide the real stereo RMS / peak visualizer\n"
                 "s            Listening statistics\n\n"

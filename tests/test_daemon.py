@@ -28,6 +28,7 @@ class FakeEngine:
         self.playing = False
         self.position = 0.0
         self.volume = 70
+        self.muted = False
         self.events: list[dict[str, Any]] = []
         self.seeks: list[float] = []
         self.streams: list[Stream] = []
@@ -53,6 +54,11 @@ class FakeEngine:
 
     def set_volume(self, value: int) -> None:
         self.volume = value
+        if value:
+            self.muted = False
+
+    def set_mute(self, value: bool) -> None:
+        self.muted = value
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -60,6 +66,7 @@ class FakeEngine:
             "duration": 200,
             "paused": self.paused,
             "volume": self.volume,
+            "muted": self.muted,
             "playing": self.playing and not self.paused,
         }
 
@@ -105,6 +112,26 @@ def player(tmp_path: Path) -> tuple:
     registry = SimpleNamespace(provider=lambda _name: provider)
     service = PlayerService(config, store, registry, engine, lambda: clock[0])
     return service, store, engine, provider, clock
+
+
+def test_volume_changes_restore_sound_and_mute_is_controllable(player: tuple) -> None:
+    service, store, engine, _, _ = player
+    service.dispatch("play", tracks=[Track("a", "Track").to_dict()])
+    assert service.dispatch("mute")["muted"] is True
+    assert service.dispatch("volume", delta=5)["muted"] is False
+    assert engine.volume == 75
+    assert store.get_setting("volume") == 75
+    assert service.dispatch("volume", delta=100)["volume"] == 100
+    assert service.dispatch("volume", delta=-100)["volume"] == 0
+    assert service.dispatch("volume", value=70)["volume"] == 70
+    assert service.dispatch("mute", value=False)["muted"] is False
+
+
+@pytest.mark.parametrize("payload", [{"delta": True}, {"delta": float("nan")}, {"value": 20, "delta": 5}])
+def test_volume_adjustment_rejects_invalid_requests(player: tuple, payload: dict) -> None:
+    service, *_ = player
+    with pytest.raises(PlaybackError):
+        service.dispatch("volume", **payload)
 
 
 def test_end_file_advances_durable_queue(player: tuple) -> None:
@@ -459,6 +486,8 @@ server.close()
     track = Track(str(music_file), "Song", ("Artist",), provider="local")
     with tempfile.TemporaryDirectory(prefix="myne-audio-") as runtime:
         config = Config(tmp_path / "data", Path(runtime), mpv_binary=str(executable))
+        for key, value in config.to_env().items():
+            monkeypatch.setenv(key, value)
         monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1] / "src"))
         first = PlayerClient(config, timeout=5)
         first.ensure_running()
@@ -481,6 +510,14 @@ server.close()
             assert second.request("pause", value=True)["paused"] is True
             assert second.request("seek", seconds=35)["position"] == 35
             assert second.request("volume", value=21)["volume"] == 21
+            from typer.testing import CliRunner
+
+            from myne.cli import app
+
+            assert CliRunner().invoke(app, ["mute"]).exit_code == 0
+            assert second.request("now")["muted"] is True
+            assert CliRunner().invoke(app, ["unmute"]).exit_code == 0
+            assert second.request("now")["muted"] is False
             assert second.request("resume")["paused"] is False
             assert second.request("now")["track"]["provider"] == "local"
         finally:

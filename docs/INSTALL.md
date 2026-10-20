@@ -184,6 +184,7 @@ local provider. Change player settings before starting the service; run
 | `MYNE_RUNTIME_DIR` | Short, private Unix socket directory | Per-user temporary directory with data-path hash |
 | `MYNE_PROVIDER` | Default provider | `youtube` |
 | `MYNE_MPV` | mpv executable path/name | `mpv` |
+| `MYNE_AUDIO_OUTPUT` | Optional mpv output driver (`--ao`), such as `pulse` | mpv automatic selection |
 | `MYNE_VOLUME` | Initial volume, 0–100 | `70`; later changes persist |
 | `MYNE_AUTH_FILE` | ytmusicapi authentication JSON | unset |
 | `MYNE_COOKIES_FILE` | yt-dlp cookie file | unset |
@@ -203,8 +204,20 @@ Unix socket path lengths are limited, so use a short runtime path. A custom
 - `myne doctor` checks the interpreter, mpv executable, paths and plugin setup
   without contacting music services.
 - If mpv is missing, install it using your OS package manager or set `MYNE_MPV`.
-- If playback is silent, first try playing a local file directly with mpv. Check
-  OS audio routing and volume, then try the same file with Myne.
+- If playback is silent, run `myne volume 70`, then `myne resume`, and inspect
+  `myne --json now` while the UI remains open. The UI's − / + and Mute/Unmute
+  controls do the same sound adjustments. Raising the volume clears mute.
+- If `playing` is false or the timer stays at zero, check the reported error:
+  a selected song may still be loading or the stream may have failed. If the
+  timer advances, compare a local file played directly by mpv with the same
+  file in Myne, and check the host's volume and selected speakers/headphones.
+- An output of `null` intentionally sends audio nowhere. Remove a `null`
+  `MYNE_AUDIO_OUTPUT` setting or a silent-output wrapper in `MYNE_MPV`, then
+  restart the service. Meters measure decoded audio and cannot verify speakers.
+- If direct mpv playback only works with a particular output driver, set the
+  same driver using `MYNE_AUDIO_OUTPUT` before starting Myne. For example,
+  `MYNE_AUDIO_OUTPUT=pulse myne ui` selects PulseAudio when it is available.
+  Run `myne shutdown` first to apply a changed output to the background player.
 - If YouTube playback fails, upgrade the extractor with
   `python -m pip install --upgrade yt-dlp`, check its runtime requirements, and
   review whether cookies or account access are needed. Search and stream

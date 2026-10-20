@@ -2,6 +2,14 @@
 
 ## Version 0.2.2 queue and recovery fixes
 
+The follow-up sound-controls update completed **239 local tests** with two
+real-mpv skips and five filesystem Unix-socket cases excluded for the same
+environment restriction described below. New checks cover recovering from zero
+volume/mute in the UI, loading and silent-output labels, bounded relative volume
+changes and output configuration passed to the background service. Full CI also
+checks mute/unmute and output reporting through real mpv using its silent test
+sink. This does not establish the cause of silent audio on a user's device.
+
 Validated on 20 October 2026 using Python 3.12.14 and Linux. The local run
 completed with **231 passing tests**, including headless TUI interaction, real
 SQLite queue transitions, stale/invalid selection protection, mpv disconnect

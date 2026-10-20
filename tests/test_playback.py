@@ -87,6 +87,19 @@ def test_play_replaces_http_headers_between_providers(
     assert calls[-2] == ("loadfile", "file:///music/song.flac", "replace")
 
 
+def test_snapshot_exposes_mute_and_the_actual_output_driver(tmp_path: Path, monkeypatch) -> None:
+    engine = MpvEngine(tmp_path / "mpv.sock")
+    properties = {"time-pos": 12, "duration": 200, "pause": False, "core-idle": False,
+                  "volume": 70, "mute": True, "current-ao": "null", "audio-device": "auto"}
+    monkeypatch.setattr(engine, "command", lambda _command, name, **_kwargs: properties.get(name))
+    with socket.socket() as connection:
+        monkeypatch.setattr(engine, "_socket", connection)
+        state = engine.snapshot()
+    assert state["muted"] is True
+    assert state["audio_output"] == "null"
+    assert state["audio_device"] == "auto"
+
+
 def test_old_playlist_end_event_cannot_finish_new_track(tmp_path: Path) -> None:
     engine = MpvEngine(tmp_path / "mpv.sock")
     engine._entry_id = 9
