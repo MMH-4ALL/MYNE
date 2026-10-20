@@ -80,7 +80,13 @@ class PlayerService:
     def _finish(self, completed: bool, stop_engine: bool = True) -> None:
         self._account()
         if stop_engine:
-            self.engine.stop()
+            try:
+                self.engine.stop()
+            except (MyneError, OSError):
+                # A disconnect can happen before tick notices it. Retire that
+                # engine so stop/next/play can still finish the durable track.
+                with suppress(MyneError, OSError):
+                    self.engine.close()
         if self._active is not None:
             self.store.finish_current(self._listened, completed)
         self._active = None
@@ -291,6 +297,23 @@ class PlayerService:
                     "playing": state.get("playing", False),
                     "position": state.get("position", 0.0),
                 }
+            if action == "play_queued":
+                index = payload.get("index")
+                if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                    raise PlaybackError("Queue index must be a non-negative integer.")
+                expected = self._tracks([payload.get("expected")])[0]
+                try:
+                    self.store.skip_to(index, expected)
+                except MyneError as exc:
+                    raise PlaybackError(str(exc)) from exc
+                self._radio_seed = None
+                self._finish(False)
+                self._error = None
+                self._failures = 0
+                self._auto = True
+                self._advance()
+                self._check_started()
+                return self.now()
             if action in {"play", "enqueue"}:
                 tracks = self._tracks(payload.get("tracks"))
                 if not tracks:

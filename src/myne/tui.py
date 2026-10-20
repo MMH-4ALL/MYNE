@@ -390,8 +390,7 @@ class MyneApp(App[None]):
         if source == "queue":
             self._selection_source = "queue"
             if 0 <= self._selected_queue < len(self.queued):
-                # Keep the tail of the queue when starting a later queued track.
-                return self.queued[self._selected_queue :]
+                return [self.queued[self._selected_queue]]
             return []
         self._selection_source = "results"
         if 0 <= self._selected_result < len(self.results):
@@ -404,7 +403,10 @@ class MyneApp(App[None]):
     def action_play(self) -> None:
         tracks = self._selected()
         if tracks:
-            self.mutate("Playing", self.service.play, tracks)
+            if self._selection_source == "queue":
+                self.mutate("Playing", self.service.play_queued, self._selected_queue, tracks[0])
+            else:
+                self.mutate("Playing", self.service.play, tracks)
         else:
             self._status("Search and select a track first.")
 
@@ -416,7 +418,7 @@ class MyneApp(App[None]):
             self._status("Search and select a track first.")
 
     def action_toggle_pause(self) -> None:
-        action = "resume" if self._snapshot.get("paused") else "pause"
+        action = "resume" if self._snapshot.get("paused") or not self._snapshot.get("track") else "pause"
         self.mutate("Resumed" if action == "resume" else "Paused", self.service.control, action)
 
     def action_next(self) -> None:
@@ -495,7 +497,7 @@ class MyneApp(App[None]):
         self._sync_lyrics_track(track)
         self.tick_playback()
         self._main_screen.query_one("#pause", Button).label = (
-            "▶ Resume" if snapshot.get("paused") else "Ⅱ Pause"
+            "▶ Start" if not track else "▶ Resume" if snapshot.get("paused") else "Ⅱ Pause"
         )
         error = snapshot.get("error")
         if error and error != self._last_player_error:
@@ -818,7 +820,7 @@ class MyneApp(App[None]):
                 "p            Play the selected track\n"
                 "a            Add the selected track to your queue\n\n"
                 "PLAYBACK\n"
-                "Space        Pause / resume\n"
+                "Space        Start queue / pause / resume\n"
                 "n            Next track\n"
                 "l            Show / hide live lyrics; timed lines follow playback\n"
                 "v            Show / hide the real stereo RMS / peak visualizer\n"

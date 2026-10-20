@@ -1,5 +1,23 @@
 # Validation record
 
+## Version 0.2.2 queue and recovery fixes
+
+Validated on 20 October 2026 using Python 3.12.14 and Linux. The local run
+completed with **231 passing tests**, including headless TUI interaction, real
+SQLite queue transitions, stale/invalid selection protection, mpv disconnect
+recovery and socket-permission error handling. All eight initial regression
+cases failed before the fixes and passed afterward.
+
+Two tests requiring an installed mpv were skipped. Five filesystem Unix-socket
+tests were excluded locally because this execution environment blocks creating
+those sockets; the CI suite keeps them enabled, including queue selection
+through the actual background service and two independent clients. Existing
+socket-pair IPC tests ran locally. Ruff, mypy across 23 source modules, and the
+wheel/source package builds passed.
+
+This update did not repeat live YouTube, lyric-service or physical audio-device
+checks. The earlier live validation below is a historical record.
+
 ## Version 0.2.1 animation update
 
 Validated on 18 October 2026 with **224 passing tests**, Ruff lint and mypy

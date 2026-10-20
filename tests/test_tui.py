@@ -52,7 +52,15 @@ class FakeApplication:
 
     def play(self, tracks: list[Track]) -> dict[str, Any]:
         self.calls.append(("play", tracks))
-        self.current, *self.up_next = tracks
+        self.current = tracks[0]
+        self.up_next = [*tracks[1:], *self.up_next]
+        return self.now()
+
+    def play_queued(self, index: int, expected: Track) -> dict[str, Any]:
+        self.calls.append(("play_queued", index, expected))
+        assert self.up_next[index] == expected
+        self.current = self.up_next[index]
+        self.up_next = self.up_next[index + 1 :]
         return self.now()
 
     def enqueue(self, tracks: list[Track]) -> dict[str, Any]:
@@ -156,6 +164,40 @@ def test_search_select_enqueue_and_play() -> None:
             await pilot.press("space")
             await settle(app)
             assert service.paused is False
+
+    asyncio.run(scenario())
+
+
+def test_playing_a_queued_selection_keeps_only_the_existing_tail() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        tail = Track("last", "Last track")
+        service.up_next = [*service.tracks, tail]
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            app.query_one("#queue", DataTable).focus()
+            await pilot.press("down", "enter")
+            await settle(app)
+            assert ("play_queued", 1, service.tracks[1]) in service.calls
+            assert service.current == service.tracks[1]
+            assert service.up_next == [tail]
+
+    asyncio.run(scenario())
+
+
+def test_space_starts_the_saved_queue_when_the_player_is_idle() -> None:
+    async def scenario() -> None:
+        service = FakeApplication()
+        service.up_next = list(service.tracks)
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            app.query_one("#queue", DataTable).focus()
+            await pilot.press("space")
+            await settle(app)
+            assert ("control", "resume") in service.calls
+            assert ("control", "pause") not in service.calls
 
     asyncio.run(scenario())
 

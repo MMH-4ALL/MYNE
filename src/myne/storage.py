@@ -131,6 +131,20 @@ class Store:
             db.execute("DELETE FROM queue WHERE position=?", (row[0],))
             return Track.from_dict(json.loads(row[1]))
 
+    def skip_to(self, index: int, expected: Track) -> None:
+        """Select an existing queue entry without copying its remaining tracks.
+
+        Validate the displayed selection in the same transaction as the trim,
+        so another client cannot silently make us start a different song.
+        """
+        with self._connect(True) as db:
+            row = db.execute(
+                "SELECT position,track FROM queue ORDER BY position LIMIT 1 OFFSET ?", (index,)
+            ).fetchone()
+            if index < 0 or row is None or Track.from_dict(json.loads(row[1])) != expected:
+                raise MyneError("The queue changed. Refresh it and select the track again.")
+            db.execute("DELETE FROM queue WHERE position<?", (row[0],))
+
     def save_queue(self, name: str = "default") -> int:
         with self._connect(True) as db:
             tracks = self._queue(db)

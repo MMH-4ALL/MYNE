@@ -89,6 +89,10 @@ class Application:
         self.store.enqueue(tracks)
         return {"added": len(tracks)}
 
+    def play_queued(self, index: int, expected: Track) -> dict[str, Any]:
+        self.player.ensure_running()
+        return self.player.request("play_queued", index=index, expected=expected.to_dict())
+
     def queue(self) -> list[Track]:
         return self.store.queue()
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.2
+
+- Playing an existing queue selection now skips to that entry without copying
+  the queue tail or creating duplicate playback. Stale selections are rejected
+  before interrupting the current song or changing the queue.
+- Space and the transport's Start button start an idle saved queue; the control
+  changes to Pause/Resume during playback.
+- Stop, next and replacement playback recover if mpv disconnects before the
+  service notices, while still recording the finished listening segment once.
+- Socket creation/permission failures produce normal Myne errors instead of
+  uncaught exceptions; status requests can still report an idle player.
+- Corrected the repository URL in the installation commands. Restart an existing
+  player with `myne shutdown` after installing this update.
+
 ## 0.2.1
 
 - Smooth 30 FPS meter rendering with eased attack/release, peak hold and

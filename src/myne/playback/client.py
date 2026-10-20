@@ -25,9 +25,10 @@ class PlayerClient:
     def request(self, action: str, **payload: Any) -> dict[str, Any]:
         if os.name == "nt":
             raise PlaybackError("Myne playback requires Linux or macOS; use WSL on Windows.")
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(self.timeout)
+        connection: socket.socket | None = None
         try:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.settimeout(self.timeout)
             connection.connect(str(self.config.socket_path))
             connection.sendall(json.dumps({"action": action, **payload}, allow_nan=False).encode() + b"\n")
             data = b""
@@ -53,7 +54,8 @@ class PlayerClient:
         except (OSError, ValueError) as exc:
             raise PlaybackError("Could not communicate with the player service.") from exc
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     def ensure_running(self) -> None:
         if os.name == "nt":
@@ -98,13 +100,15 @@ class PlayerClient:
 
     def _reachable(self) -> bool:
         """Probe transport without waiting behind provider work in a healthy daemon."""
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(0.5)
-            try:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(0.5)
                 connection.connect(str(self.config.socket_path))
                 return True
-            except OSError:
-                return False
+        except (FileNotFoundError, ConnectionRefusedError, TimeoutError):
+            return False
+        except OSError as exc:
+            raise PlaybackError("Could not open the player socket. Check runtime directory permissions.") from exc
 
     def shutdown(self) -> None:
         self.request("shutdown")

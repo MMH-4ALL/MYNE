@@ -98,8 +98,9 @@ samples, retain peaks briefly, and clear on pause, buffering or stale data. Set
 transitions. `TEXTUAL_ANIMATIONS=none` and `TERM=dumb` also reduce motion;
 `NO_COLOR` controls color without changing animation preferences.
 
-After upgrading from Myne 0.1, restart the existing player with `myne shutdown`,
-then `myne play`. UI telemetry uses the updated local IPC protocol.
+After upgrading Myne, restart the existing player with `myne shutdown`, then
+`myne play`. The background service must reload the installed code for updated
+UI controls and playback fixes to take effect.
 
 ## Optional YouTube authentication
 

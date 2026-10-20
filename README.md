@@ -19,8 +19,8 @@ myne ui
 Linux and macOS are supported. Install **Python 3.12+** and **mpv**, then:
 
 ```sh
-git clone https://github.com/MMH-4ALL/myne-cli.git
-cd myne-cli
+git clone https://github.com/MMH-4ALL/MYNE.git
+cd MYNE
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
@@ -136,6 +136,11 @@ Wide terminals show a lyrics side panel automatically; compact terminals switch
 between tracks and lyrics. Timed lines follow playback, pause and seeking. Plain
 lyrics remain scrollable and show their source. Closing the TUI leaves the player
 running. Network and database work runs outside the UI event loop.
+
+Playing a selected queue entry skips the entries before it and continues through
+the existing tail once. If another client changes the selected entry first, Myne
+asks you to refresh and select it again. Space or the Start control begins the
+saved queue when nothing is playing, then pauses/resumes active playback.
 
 Meters render smoothly at 30 FPS with eased attack/release, peak hold, and
 fractional block edges. Audio is polled separately at a bounded rate, so smoother
