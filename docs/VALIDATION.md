@@ -19,6 +19,13 @@ same five filesystem-socket exclusions documented below. Ruff and mypy pass
 across 31 application modules. Full filesystem-socket and real-mpv coverage
 remains enabled in the Python 3.12/3.13 CI matrix.
 
+The first CI run passed all 394 tests on Python 3.12. Python 3.13 exposed a real
+shutdown race: a render timer could tick after Textual removed the screen stack.
+Paint/resize callbacks now ignore an unmounted screen and UI timers stop during
+unmount, with a deterministic shutdown regression. The lyrics animation test
+also drains initial layout work and pauses background timers before advancing
+its own playback state, so polling cannot overwrite its controlled clock.
+
 ## Version 0.4.0 settings, updater and bug review
 
 The first full local suite passed 379 tests on Python 3.12.14, with two real-mpv

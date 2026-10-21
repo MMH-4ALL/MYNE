@@ -753,6 +753,12 @@ def test_lyrics_ease_on_line_advance_but_snap_after_seek() -> None:
         app.animation_level = "full"
         async with app.run_test(size=(120, 36)) as pilot:
             await settle(app)
+            # This test advances the clock itself. Drain initial layout work
+            # and prevent real polling/render timers from replacing its state.
+            app._render_timer.pause()
+            app._playback_timer.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
             scroll = app.query_one("#lyrics-scroll")
             calls = []
             scroll.scroll_to = lambda **kwargs: calls.append(kwargs)
@@ -1341,4 +1347,22 @@ def test_settings_modal_blocks_listening_shortcut_and_collection_metadata_is_lit
             await pilot.pause()
             await pilot.press("f3")
             assert app._listening
+    asyncio.run(scenario())
+
+
+def test_playback_paint_callbacks_ignore_unmounted_screen():
+    async def scenario():
+        app = MyneApp(FakeApplication(), reduced_motion=False)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)):
+            await settle(app)
+        assert not app.screen_stack
+        # A timer tick or queued after-refresh callback can arrive while
+        # Textual is removing screens during shutdown.
+        app.tick_playback()
+        app._render_audio()
+        app._render_lyrics(force=True)
+        app._layout_lyrics()
+        app._fit_tables()
+        app._scroll_lyrics_to(0, None, -1, False)
+        app._status("Late worker result")
     asyncio.run(scenario())

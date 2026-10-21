@@ -348,7 +348,7 @@ class MyneApp(App[None]):
         self._main_screen.query_one("#queue", DataTable).add_column("Up next")
         self._main_screen.query_one("#search", Input).focus()
         self.refresh_playback()
-        self.set_interval(1.0, self.refresh_playback)
+        self._playback_timer = self.set_interval(1.0, self.refresh_playback)
         self._audio_poll_timer = self.set_interval(0.12, self.sample_audio)
         self._render_timer = self.set_interval(0.12 if self._reduced_motion else 1 / 30, self.tick_playback)
         self._layout_lyrics()
@@ -361,6 +361,9 @@ class MyneApp(App[None]):
             self.call_after_refresh(self._layout_lyrics)
 
     async def on_unmount(self) -> None:
+        for name in ("_render_timer", "_audio_poll_timer", "_playback_timer"):
+            if timer := getattr(self, name, None):
+                timer.stop()
         if self._visualizer_connected:
             try:
                 await asyncio.wait_for(asyncio.to_thread(self.service.visualizer, False), timeout=1.0)
@@ -368,6 +371,8 @@ class MyneApp(App[None]):
                 pass
 
     def _layout_lyrics(self) -> None:
+        if not self.screen_stack:
+            return
         sidebar = self._sidebar_override if self._sidebar_override is not None else self.size.width >= 100
         sidebar = sidebar and not self._listening
         self._main_screen.query_one("#sidebar").display = sidebar
@@ -401,6 +406,8 @@ class MyneApp(App[None]):
 
     def _fit_tables(self) -> None:
         """Reflow existing metadata after layout changes without fetching again."""
+        if not self.screen_stack:
+            return
         if self._main_screen.query_one("#results-pane").display and not self._library_loading and self._view != "playlists":
             self._render_tracks(self.results, preserve_selection=True)
         if self._main_screen.query_one("#queue-pane").display:
@@ -415,6 +422,8 @@ class MyneApp(App[None]):
         self._status("Listening room · F3 returns to your library · l toggles lyrics" if self._listening else "Back to your library · F3 opens the listening room")
 
     def _status(self, message: str, *, error: bool = False) -> None:
+        if not self.screen_stack:
+            return
         widget = self._main_screen.query_one("#status", Static)
         widget.update(_plain(message))
         widget.set_class(error, "error")
@@ -1217,7 +1226,7 @@ class MyneApp(App[None]):
 
     def tick_playback(self) -> None:
         """Keep the cursor smooth; the next mpv sample corrects seeks and stalls."""
-        if not self._main_screen.query("#time"):
+        if not self.screen_stack or not self._main_screen.query("#time"):
             return
         snapshot = self._snapshot
         position = self._playback_position()
@@ -1320,7 +1329,7 @@ class MyneApp(App[None]):
             self._render_audio()
 
     def _render_audio(self) -> None:
-        if not self._main_screen.query("#audio-meter"):
+        if not self.screen_stack or not self._main_screen.query("#audio-meter"):
             return
         meter = self._main_screen.query_one("#audio-meter", Static)
 
@@ -1420,7 +1429,7 @@ class MyneApp(App[None]):
             self._lyrics_fetching = False
 
     def _render_lyrics(self, position: float | None = None, *, force: bool = False) -> None:
-        if not self._main_screen.query("#lyrics-body"):
+        if not self.screen_stack or not self._main_screen.query("#lyrics-body"):
             return
         document = self._lyrics_document
         position = self._playback_position() if position is None else position
@@ -1496,7 +1505,7 @@ class MyneApp(App[None]):
             source.update(_plain(f"{document.source} · plain lyrics · scroll ↑ ↓"))
 
     def _scroll_lyrics_to(self, target: int, key: tuple[str, str] | None, index: int, animate: bool) -> None:
-        if self._lyrics_key != key or self._lyric_index != index or not self._main_screen.query_one("#lyrics-pane").display:
+        if not self.screen_stack or self._lyrics_key != key or self._lyric_index != index or not self._main_screen.query_one("#lyrics-pane").display:
             return
         self._main_screen.query_one("#lyrics-scroll", VerticalScroll).scroll_to(
             y=target,

@@ -17,6 +17,8 @@
   before applying breakpoints, and prevent compact horizontal table overflow.
 - Retain Studio, Midnight and Ember, real mpv measurements, reduced motion,
   playlist imports, saved settings and update controls.
+- Stop playback/render timers during UI shutdown and ignore late paint/resize
+  callbacks after Textual has removed the main screen.
 
 ## 0.4.0
 
