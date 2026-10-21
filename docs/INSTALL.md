@@ -202,6 +202,15 @@ Unix socket path lengths are limited, so use a short runtime path. A custom
 
 ## Troubleshooting
 
+- Press **F2** for Settings, including the Updates tab. `myne update` only checks;
+  `myne update --install` installs a newer compatible version from official main
+  when MYNE is in a writable, non-editable virtual environment with pip. Daily
+  launch checks are opt-in and never install without pressing Install update.
+  Editable installs should use `git pull` and `python -m pip install -e .` in
+  their checkout; system-managed installs should use their original installer.
+  Keep MYNE open until installation finishes. After a successful update, close
+  the UI, run `myne shutdown`, then `myne ui`. Reinstall with the original method
+  if an installation fails. A newer development build will not downgrade to main.
 - For playlist imports, use **Ctrl+O** in the UI or `myne playlist import LINK`.
   Spotify's public embed can expose only part of a playlist; MYNE labels it as
   potentially partial. The optional token uses the current `/items` API with

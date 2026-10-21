@@ -44,7 +44,10 @@ class PlayerClient:
                 raise PlaybackError("The player service returned an invalid response.")
             if not result.get("ok"):
                 raise PlaybackError(str(result.get("error", "The player service rejected the command.")))
-            return result.get("data", {})
+            payload = result.get("data", {})
+            if not isinstance(payload, dict):
+                raise PlaybackError("The player service returned invalid command data.")
+            return payload
         except (FileNotFoundError, ConnectionRefusedError) as exc:
             raise PlaybackError("The player is not running. Start playback with myne play <song>.") from exc
         except (socket.timeout, TimeoutError) as exc:

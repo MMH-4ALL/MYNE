@@ -5,3 +5,4 @@ textual>=6.12,<7
 ytmusicapi>=1.10,<2
 yt-dlp[default]>=2026.8.19
 platformdirs>=4,<5
+packaging>=24,<27

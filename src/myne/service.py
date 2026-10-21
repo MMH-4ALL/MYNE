@@ -15,8 +15,10 @@ from myne.models import Album, Artist, Playlist, Track
 from myne.playback.client import PlayerClient
 from myne.playlists import ImportResult, PlaylistImporter, Progress
 from myne.plugins import PluginRegistry
+from myne.preferences import Preferences
 from myne.providers.base import MusicProvider
 from myne.storage import Store
+from myne.updates import UpdateInfo, UpdateManager
 
 
 class Application:
@@ -28,6 +30,7 @@ class Application:
         player: PlayerClient | None = None,
         lyrics_service: LyricsService | None = None,
         playlist_importer: PlaylistImporter | None = None,
+        updater: UpdateManager | None = None,
     ) -> None:
         self.config = config
         self.store = store or Store(config.database)
@@ -36,6 +39,7 @@ class Application:
         self._live_player = player or PlayerClient(config, timeout=2.0)
         self._lyrics = lyrics_service or LyricsService(self.registry.provider, config.data_dir)
         self._playlist_importer = playlist_importer
+        self._updater = updater
 
     @property
     def provider(self) -> MusicProvider:
@@ -152,19 +156,60 @@ class Application:
         return value if isinstance(value, str) else "myne-studio"
 
     def save_ui_theme(self, name: str) -> None:
+        Preferences.from_dict({"theme": name}, strict=True)
         self.store.set_setting("ui_theme", name)
+
+    def preferences(self) -> Preferences:
+        values = Preferences(volume=self.config.volume).to_dict()
+        saved = self.store.get_setting("preferences", {})
+        if isinstance(saved, dict):
+            values.update({key: value for key, value in saved.items() if key in values})
+        values["theme"] = self.store.get_setting("ui_theme", values["theme"])
+        values["volume"] = self.store.get_setting("volume", values["volume"])
+        return Preferences.from_dict(values)
+
+    def save_preferences(self, values: dict[str, Any]) -> Preferences:
+        preferences = Preferences.from_dict(values, strict=True)
+        self.store.set_settings({"preferences": preferences.to_dict(), "ui_theme": preferences.theme,
+                                 "volume": preferences.volume})
+        # Saving settings must never start mpv. A reachable running player can
+        # use the new volume immediately; otherwise the next start reads it.
+        if self.config.socket_path.exists():
+            try:
+                self._live_player.request("volume", value=preferences.volume)
+            except PlaybackError:
+                pass
+        return preferences
+
+    @property
+    def updates(self) -> UpdateManager:
+        if self._updater is None:
+            self._updater = UpdateManager(self.store)
+        return self._updater
+
+    def update_status(self) -> UpdateInfo:
+        return self.updates.status()
+
+    def check_update(self, force: bool = True) -> UpdateInfo:
+        return self.updates.check(force=force)
+
+    def install_update(self, progress: Any = None) -> UpdateInfo:
+        return self.updates.install(progress)
 
     def now(self) -> dict[str, Any]:
         try:
             return self._live_player.request("now")
         except PlaybackError as exc:
+            volume = self.store.get_setting("volume", self.config.volume)
+            if type(volume) is not int or not 0 <= volume <= 100:
+                volume = self.config.volume
             return {
                 "track": None,
                 "paused": False,
                 "playing": False,
                 "position": 0.0,
                 "duration": None,
-                "volume": self.config.volume,
+                "volume": volume,
                 "muted": False,
                 "audio_output": None,
                 "audio_device": None,

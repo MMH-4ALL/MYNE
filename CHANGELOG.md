@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0
+
+- Settings screen from the masthead, F2, or command palette, with Appearance,
+  Playback and Updates tabs. Theme, sidebar, lyrics, visualizer, reduced motion,
+  saved volume and automatic update checks persist together in SQLite.
+- Optional daily update checks on launch, off by default, with caching and
+  failure backoff. Check now always retries immediately; checks never install.
+- Install update button and `myne update --install` for supported, writable,
+  non-editable virtual environments. The updater rechecks official main,
+  prepares a wheel from a pinned commit, verifies package/version metadata,
+  installs with that environment's pip, then verifies the installed version.
+- Unsupported or editable installations show instructions for their original
+  install method. Older and prerelease builds are not offered as updates.
+  A successful update requires restarting the UI and background player.
+- `myne settings show/set` and `myne update` provide matching CLI controls.
+- Clear stale play/queue targets while a different playlist is loading, and
+  replace loading placeholders after a library failure.
+- Compact lyrics correctly hide both track panes and restore them on return.
+  User choices made during startup survive a delayed preferences load.
+- Player client rejects invalid response data with a normal playback error;
+  idle volume reporting now reflects the saved setting.
+- Modal screens retain keyboard focus and reject underlying music shortcuts.
+
 ## 0.3.1
 
 - Toggleable playlist sidebar with direct collection navigation at all supported

@@ -1,7 +1,7 @@
 Screen { background: $background; color: $foreground; }
 #masthead { height: 2; padding: 0 2; background: $surface; }
 #brand { width: 1fr; height: 2; color: $primary; text-style: bold; }
-#header-right { width: 38; height: 2; }
+#header-right { width: 50; height: 2; }
 #session-state { height: 1; color: $text-muted; text-align: right; }
 #header-buttons { height: 1; align-horizontal: right; }
 #header-buttons Button {

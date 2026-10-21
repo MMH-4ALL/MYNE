@@ -56,6 +56,8 @@ needs WSL with mpv and audio configured; native Windows IPC is not implemented.
   playback progress, transport controls, help, lyrics and statistics.
 - A toggleable playlist sidebar and shared-link imports from Spotify, YouTube
   Music, YouTube, and SoundCloud, with persistent song collections and source links.
+- Saved settings for appearance and playback, plus optional daily update checks
+  and a manual update installer for supported virtual environments.
 - Local audio playback and library search, plus an explicit provider extension
   contract and opt-in Python entry-point plugins.
 
@@ -131,6 +133,50 @@ after 30 seconds or half of a shorter track. A killed service preserves its song
 but cannot recover uncommitted listening seconds.
 
 ## TUI
+
+### Settings and updates
+
+Open **Settings** from the masthead, press **F2**, or find Settings in **Ctrl+K**.
+The Appearance tab offers theme, sidebar, lyrics, visualizer and reduced motion.
+Playback stores a volume from 0 to 100; it also applies to a reachable running
+player without starting one. **Save settings** applies the form; Close/Esc
+discards unsaved edits. Older saved theme and volume values are preserved.
+
+The **Updates** tab has **Check now**, **Install update**, and **Check on launch**.
+Automatic checks are off by default. When enabled they check at launch, cache a
+successful result for a day, and back off for a day after a failure. Check now
+always retries immediately. Automatic checks do not install anything.
+
+Updates use the official `MMH-4ALL/MYNE` GitHub **main** branch. The installer
+rechecks the version, prepares a wheel from its fixed commit, checks the wheel's
+package/version metadata, then installs it using the current environment's pip.
+Only newer stable versions compatible with the current Python are offered.
+This development build correctly declines to replace itself with an older main
+branch version. Update checks need internet access; no account or API key is needed.
+
+The installer supports writable, non-editable virtual environments with pip,
+including normal pipx installations. Editable checkouts, system-managed installs,
+and environments without pip show their installation instructions instead.
+It does not use sudo, force a git reset, or bypass system package protections.
+Keep the update window open during installation. After success, close the UI,
+run `myne shutdown`, then `myne ui` to reload both processes. If installation
+fails, reinstall using the original install method; pip installs are not rollback transactions.
+
+```sh
+myne settings show
+myne settings set theme myne-ember
+myne settings set sidebar show
+myne settings set auto_check_updates true
+myne update                  # check only
+myne update --install        # explicitly install a newer compatible version
+myne --json update
+```
+
+![MYNE settings and update controls, shown with explicitly labelled sample update metadata](docs/settings.svg)
+
+*Actual UI capture with sample update status; no installation was performed for the preview.*
+
+### Music workspace
 
 Version 0.3 adds a Studio workspace with a playlist sidebar, visible by default
 at widths of 100 columns or more. `Ctrl+B` or the Library button toggles it at

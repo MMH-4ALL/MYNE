@@ -5,17 +5,20 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 import pytest
 from rich.text import Text
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import DataTable, Input, Select, Static, Switch, TabbedContent
 
 from myne.errors import MyneError
 from myne.lyrics import LyricsDocument, LyricsLine
 from myne.models import Playlist, Track
 from myne.playlists import ImportResult
+from myne.preferences import Preferences
 from myne.tui import DetailScreen, MyneApp, _clock, _meter
+from myne.updates import UpdateInfo
 
 
 class FakeApplication:
@@ -44,6 +47,13 @@ class FakeApplication:
         self.import_started = threading.Event()
         self.import_error: str | None = None
         self.theme_name = "myne-studio"
+        self.user_preferences = Preferences()
+        self.update_info = UpdateInfo("0.4.0", install_note="Test installation")
+        self.update_error: str | None = None
+        self.install_gate: threading.Event | None = None
+        self.install_started = threading.Event()
+        self.playlist_gate: threading.Event | None = None
+        self.playlist_started = threading.Event()
         self.document: LyricsDocument | None = LyricsDocument(
             "Test song", "Test artist", "A lyric with [literal brackets].\nAnother line.", (), "Test lyrics"
         )
@@ -139,6 +149,37 @@ class FakeApplication:
     def save_ui_theme(self, name: str) -> None:
         self.theme_name = name
 
+    def preferences(self) -> Preferences:
+        return replace(self.user_preferences, theme=self.theme_name, volume=self.volume)
+
+    def save_preferences(self, values) -> Preferences:
+        self.user_preferences = Preferences.from_dict(values, strict=True)
+        self.theme_name = self.user_preferences.theme
+        self.volume = self.user_preferences.volume
+        return self.user_preferences
+
+    def update_status(self) -> UpdateInfo:
+        return self.update_info
+
+    def check_update(self, force=True) -> UpdateInfo:
+        self.calls.append(("check_update", force))
+        if self.update_error:
+            raise MyneError(self.update_error)
+        self.update_info = UpdateInfo("0.4.0", "0.4.1", "a" * 40, True, True, "MYNE 0.4.1 is available.", "Test installation")
+        return self.update_info
+
+    def install_update(self, progress=None) -> UpdateInfo:
+        self.calls.append(("install_update",))
+        self.install_started.set()
+        if progress:
+            progress("Preparing update…")
+        if self.install_gate:
+            self.install_gate.wait(3)
+        if self.update_error:
+            raise MyneError(self.update_error)
+        self.update_info = replace(self.update_info, can_install=False, message="Update installed. Restart MYNE.")
+        return self.update_info
+
     def playlists(self) -> list[tuple[str, int]]:
         return [(name, len(tracks)) for name, tracks in sorted(self.saved.items())]
 
@@ -151,6 +192,9 @@ class FakeApplication:
         return {"restored": len(self.up_next)}
 
     def playlist(self, name: str) -> Playlist:
+        self.playlist_started.set()
+        if self.playlist_gate:
+            self.playlist_gate.wait(3)
         return self.saved_sources.get(name, Playlist(name, tuple(self.saved[name]), "Saved queue"))
 
     def import_playlist(self, link, name=None, *, progress=None, cancel=None) -> ImportResult:
@@ -318,7 +362,7 @@ def test_sound_controls_recover_zero_volume_and_toggle_mute() -> None:
             await pilot.click("#mute")
             await settle(app)
             assert service.muted is True
-            await pilot.click("#mute")
+            await pilot.press("m")
             await settle(app)
             assert service.muted is False
 
@@ -968,4 +1012,216 @@ def test_import_can_cancel_while_matching_without_saving() -> None:
             await settle(app)
             assert app.screen is app._main_screen
             assert not service.saved
+    asyncio.run(scenario())
+
+
+def test_opening_a_different_playlist_clears_old_play_targets_while_loading():
+    async def scenario():
+        service = FakeApplication()
+        service.saved = {"First": [service.tracks[0]], "Second": [service.tracks[1]]}
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(100, 30)):
+            await settle(app)
+            app.open_playlist("First")
+            await settle(app)
+            service.playlist_gate = threading.Event()
+            service.playlist_started.clear()
+            app.open_playlist("Second")
+            try:
+                assert await asyncio.to_thread(service.playlist_started.wait, 1)
+                assert app._open_playlist is None
+                assert app.results == []
+                assert app.query_one("#playlist-play").disabled
+                app.action_playlist_play()
+                app.action_playlist_queue()
+                assert not any(call[0] in {"play", "enqueue"} for call in service.calls)
+            finally:
+                service.playlist_gate.set()
+            await settle(app)
+            assert app.results == [service.tracks[1]]
+            assert not app.query_one("#playlist-play").disabled
+    asyncio.run(scenario())
+
+
+def test_compact_lyrics_hide_queue_and_restore_both_track_panes():
+    async def scenario():
+        app = MyneApp(FakeApplication())  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            app.action_lyrics()
+            await pilot.pause()
+            assert not app.query_one("#results-pane").display
+            assert not app.query_one("#queue-pane").display
+            assert app.query_one("#lyrics-pane").region.right <= 80
+            app.action_lyrics()
+            await pilot.pause()
+            assert app.query_one("#results-pane").display
+            assert app.query_one("#queue-pane").display
+    asyncio.run(scenario())
+
+
+def test_settings_save_applies_and_survives_reopening(monkeypatch):
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("MYNE_REDUCED_MOTION", raising=False)
+    monkeypatch.delenv("TEXTUAL_ANIMATIONS", raising=False)
+    async def scenario():
+        service = FakeApplication()
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            await pilot.press("f2")
+            await settle(app)
+            screen = app.screen
+            screen.query_one("#setting-theme", Select).value = "myne-midnight"
+            screen.query_one("#setting-sidebar", Select).value = "show"
+            screen.query_one("#setting-lyrics", Select).value = "hide"
+            screen.query_one("#setting-visualizer", Switch).value = False
+            screen.query_one("#setting-motion", Switch).value = True
+            screen.query_one("#setting-volume", Input).value = "38"
+            await pilot.click("#settings-save")
+            await settle(app)
+            assert app.screen is app._main_screen
+            assert app.theme == "myne-midnight"
+            assert app.query_one("#sidebar").display
+            assert not app.query_one("#lyrics-pane").display
+            assert not app.query_one("#audio-meter").display
+            assert app._audio_motion.reduced_motion
+            assert service.volume == 38
+        reopened = MyneApp(service)  # type: ignore[arg-type]
+        async with reopened.run_test(size=(80, 24)):
+            await settle(reopened)
+            assert reopened.theme == "myne-midnight"
+            assert reopened.query_one("#sidebar").display
+            assert not reopened._visualizer_enabled
+            assert reopened._reduced_motion
+    asyncio.run(scenario())
+
+
+def test_settings_cancel_does_not_apply_edits_or_trigger_shortcuts():
+    async def scenario():
+        service = FakeApplication()
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            await pilot.press("f2")
+            await settle(app)
+            screen = app.screen
+            screen.query_one("#setting-theme", Select).value = "myne-ember"
+            await pilot.press("ctrl+b", "ctrl+o", "f2")
+            assert app.screen is screen
+            assert len(app.screen_stack) == 2
+            assert app.theme == "myne-studio"
+            # Native Tab navigation must still work inside the modal.
+            focused = app.focused
+            await pilot.press("tab")
+            assert app.focused is not focused
+            await pilot.click("#settings-cancel")
+            await pilot.pause()
+            assert app.screen is app._main_screen
+            assert service.theme_name == "myne-studio"
+    asyncio.run(scenario())
+
+
+def test_invalid_settings_volume_keeps_form_open():
+    async def scenario():
+        service = FakeApplication()
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            await pilot.press("f2")
+            await settle(app)
+            app.screen.query_one("#setting-volume", Input).value = "999"
+            await pilot.click("#settings-save")
+            await settle(app)
+            assert app.screen is not app._main_screen
+            assert "0 to 100" in str(app.screen.query_one("#settings-message", Static).render())
+            assert service.volume == 75
+    asyncio.run(scenario())
+
+
+def test_settings_manual_update_shows_progress_prevents_duplicate_install_and_reports_restart():
+    async def scenario():
+        service = FakeApplication()
+        service.install_gate = threading.Event()
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            await pilot.press("f2")
+            await settle(app)
+            app.screen.query_one("#settings-tabs", TabbedContent).active = "updates-tab"
+            await pilot.pause()
+            await pilot.click("#check-update")
+            await settle(app)
+            assert not app.screen.query_one("#install-update").disabled
+            await pilot.click("#install-update")
+            try:
+                assert await asyncio.to_thread(service.install_started.wait, 1)
+                assert app.screen.query_one("#install-update").disabled
+                await pilot.press("escape", "ctrl+q")
+                assert app.screen is not app._main_screen
+                assert service.calls.count(("install_update",)) == 1
+            finally:
+                service.install_gate.set()
+            await settle(app)
+            assert "Restart MYNE" in str(app.screen.query_one("#update-progress", Static).render())
+            assert app.screen.query_one("#install-update").disabled
+    asyncio.run(scenario())
+
+
+def test_update_failure_remains_visible_and_form_usable():
+    async def scenario():
+        service = FakeApplication()
+        service.update_error = "Could not check for updates. Check your connection and retry."
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(app)
+            await pilot.press("f2")
+            await settle(app)
+            app.screen.query_one("#settings-tabs", TabbedContent).active = "updates-tab"
+            await pilot.pause()
+            await pilot.click("#check-update")
+            await settle(app)
+            assert "connection" in str(app.screen.query_one("#update-progress", Static).render())
+            assert not app.screen.query_one("#check-update").disabled
+            assert app.screen.query_one("#install-update").disabled
+            assert not app.screen.query_one("#settings-save").disabled
+    asyncio.run(scenario())
+
+
+def test_automatic_update_check_is_opt_in_and_does_not_install():
+    async def scenario():
+        service = FakeApplication()
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)):
+            await settle(app)
+            assert not any(call[0] == "check_update" for call in service.calls)
+        service.user_preferences = Preferences(auto_check_updates=True)
+        reopened = MyneApp(service)  # type: ignore[arg-type]
+        async with reopened.run_test(size=(80, 24)):
+            await settle(reopened)
+            assert ("check_update", False) in service.calls
+            assert not any(call[0] == "install_update" for call in service.calls)
+    asyncio.run(scenario())
+
+
+def test_slow_preferences_do_not_overwrite_a_sidebar_choice_made_during_startup():
+    async def scenario():
+        service = FakeApplication()
+        gate, started = threading.Event(), threading.Event()
+        def preferences():
+            started.set()
+            gate.wait(3)
+            return Preferences(theme="myne-ember")
+        service.preferences = preferences
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            try:
+                assert await asyncio.to_thread(started.wait, 1)
+                await pilot.press("ctrl+b")
+                assert app.query_one("#sidebar").display
+            finally:
+                gate.set()
+            await settle(app)
+            assert app.query_one("#sidebar").display
+            assert app.theme == "myne-ember"
     asyncio.run(scenario())

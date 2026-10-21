@@ -1,5 +1,31 @@
 # Validation record
 
+## Version 0.4.0 settings, updater and bug review
+
+The first full local suite passed 379 tests on Python 3.12.14, with two real-mpv
+skips and the same five filesystem-socket exclusions documented below. New
+coverage includes validated/atomic preference saves and migration, idle volume,
+invalid player responses, slow playlist changes, compact lyrics, modal keyboard
+focus, startup preferences, and settings/update controls at 80×24.
+
+Updater tests cover semantic version ordering, prerelease/downgrade rejection,
+Python compatibility, malformed metadata, offline/rate-limit failures, caching,
+daily failure backoff, editable/system installs, concurrent update exclusion,
+wheel name/version validation, and process timeout cleanup. A real temporary
+virtual environment upgraded a synthetic MYNE test package from 0.4.0 to 0.4.1
+through the installer, then imported the new version in a fresh interpreter.
+The working development environment was not replaced.
+
+A live anonymous GitHub check read official main, identified version 0.2.1 and
+correctly declined a downgrade from this 0.4.0 build. It also identified this
+workspace's editable installation and supplied manual instructions. No newer
+official version was installed live. Physical speaker routing remains a
+separate device check. Ruff and mypy pass across 30 application modules.
+
+The settings UI was rendered at 144×42 and 80×24 for Appearance, Playback and
+Updates. The settings preview explicitly labels its sample update status;
+the example 0.4.1 update in the image is not a published release claim.
+
 ## Version 0.3.1 playlist import and sidebar
 
 Validated locally on 20 October 2026 using Python 3.12.14. The offline suite

@@ -63,6 +63,23 @@ def test_missing_mpv_is_actionable(tmp_path: Path) -> None:
         engine.start()
 
 
+@pytest.mark.parametrize("data", [[], None, "unexpected", 7])
+def test_player_client_rejects_invalid_command_data_without_crashing(tmp_path, monkeypatch, data):
+    from myne.config import Config
+    from myne.playback.client import PlayerClient
+
+    class Connection:
+        def settimeout(self, _timeout): pass
+        def connect(self, _path): pass
+        def sendall(self, _payload): pass
+        def recv(self, _size):
+            return json.dumps({"ok": True, "data": data}).encode() + b"\n"
+        def close(self): pass
+    monkeypatch.setattr("myne.playback.client.socket.socket", lambda *_: Connection())
+    with pytest.raises(PlaybackError, match="invalid command data"):
+        PlayerClient(Config(tmp_path, tmp_path)).request("now")
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Unix permissions")
 def test_private_runtime_rejects_symlink(tmp_path: Path) -> None:
     real = tmp_path / "real"

@@ -112,6 +112,34 @@ def test_cli_ai_needs_explicit_configuration(isolated, monkeypatch):
     assert "MYNE_MIX_ENDPOINT" in result.output
 
 
+def test_cli_settings_persist_and_validate_before_saving(isolated):
+    result = isolated.invoke(app, ["settings", "set", "theme", "myne-ember"])
+    assert result.exit_code == 0, result.output
+    assert isolated.invoke(app, ["settings", "set", "auto_check_updates", "on"]).exit_code == 0
+    result = isolated.invoke(app, ["--json", "settings", "show"])
+    assert json.loads(result.output)["theme"] == "myne-ember"
+    assert json.loads(result.output)["auto_check_updates"] is True
+    for args in [["volume", "101"], ["visualizer", "anything"], ["unknown", "true"]]:
+        result = isolated.invoke(app, ["--json", "settings", "set", *args])
+        assert result.exit_code == 1
+        assert "error" in json.loads(result.output)
+
+
+def test_cli_update_defaults_to_check_and_install_is_explicit(isolated, monkeypatch):
+    from myne.updates import UpdateInfo
+
+    service = Mock()
+    service.check_update.return_value = UpdateInfo("0.4.0", message="Up to date")
+    service.install_update.return_value = UpdateInfo("0.4.0", message="Installed; restart")
+    monkeypatch.setattr("myne.cli.application", lambda _ctx: service)
+    result = isolated.invoke(app, ["--json", "update"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["message"] == "Up to date"
+    service.install_update.assert_not_called()
+    assert isolated.invoke(app, ["update", "--install"]).exit_code == 0
+    service.install_update.assert_called_once()
+
+
 def test_service_injects_provider_and_player(isolated, tmp_path):
     from myne.plugins import PluginRegistry
     from myne.providers.local import LocalMusicProvider

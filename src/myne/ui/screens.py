@@ -41,6 +41,8 @@ class SaveQueueScreen(ModalScreen[str | None]):
                 yield Button("Save queue", id="confirm-save", variant="primary")
 
     def on_mount(self) -> None:
+        for button in self.query(Button):
+            button.styles.line_pad = 0
         self.query_one(Input).focus()
 
     def action_cancel(self) -> None:

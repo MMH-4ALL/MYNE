@@ -275,8 +275,12 @@ class Store:
         return result
 
     def set_setting(self, key: str, value: Any) -> None:
+        self.set_settings({key: value})
+
+    def set_settings(self, values: dict[str, Any]) -> None:
+        rows = [(key, json.dumps(value, allow_nan=False)) for key, value in values.items()]
         with self._connect(True) as db:
-            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)", (key, json.dumps(value)))
+            db.executemany("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)", rows)
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self._connect() as db:

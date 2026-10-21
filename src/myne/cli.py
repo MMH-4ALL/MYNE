@@ -24,6 +24,7 @@ from myne.config import Config
 from myne.errors import MyneError
 from myne.models import Track
 from myne.motion import AudioMotion, reduced_motion_requested
+from myne.preferences import CHOICES, Preferences
 from myne.service import Application
 
 app = typer.Typer(name="myne", help="My Music. My Queue. My Experience. Myne CLI.", no_args_is_help=True)
@@ -31,6 +32,8 @@ queue_app = typer.Typer(help="Manage your persistent upcoming queue.", no_args_i
 app.add_typer(queue_app, name="queue")
 playlist_app = typer.Typer(help="Import and browse playlists from shared links.", no_args_is_help=True)
 app.add_typer(playlist_app, name="playlist")
+settings_app = typer.Typer(help="View or change saved settings.", no_args_is_help=True)
+app.add_typer(settings_app, name="settings")
 console = Console(highlight=False)
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -592,6 +595,45 @@ def ui(ctx: typer.Context) -> None:
     from myne.tui import launch_ui
 
     launch_ui(application(ctx))
+
+
+@settings_app.command("show")
+@handled
+def settings_show(ctx: typer.Context) -> None:
+    values = application(ctx).preferences().to_dict()
+    emit(ctx, values, "\n".join(f"{key}: {value}" for key, value in values.items()))
+
+
+@settings_app.command("set")
+@handled
+def settings_set(ctx: typer.Context, key: str, value: str) -> None:
+    service = application(ctx)
+    values = service.preferences().to_dict()
+    if key not in values:
+        raise MyneError("Unknown setting. Run myne settings show for supported names.")
+    if key in CHOICES:
+        parsed: Any = value
+    elif key == "volume":
+        if not value.isascii() or not value.isdigit():
+            raise MyneError("Volume must be an integer from 0 to 100.")
+        parsed = int(value)
+    elif value.lower() in {"true", "on", "yes", "1", "false", "off", "no", "0"}:
+        parsed = value.lower() in {"true", "on", "yes", "1"}
+    else:
+        raise MyneError("Use true or false for this setting.")
+    values[key] = parsed
+    preferences = Preferences.from_dict(values, strict=True)
+    saved = service.save_preferences(preferences.to_dict())
+    emit(ctx, saved.to_dict(), f"Saved {key} · {value}")
+
+
+@app.command("update")
+@handled
+def update_command(ctx: typer.Context, install: bool = typer.Option(False, "--install", help="Install a newer official version in a supported environment.")) -> None:
+    """Check for an update; add --install to prepare, verify, and install it."""
+    service = application(ctx)
+    info = service.install_update() if install else service.check_update(True)
+    emit(ctx, asdict(info), f"{info.message}\n{info.install_note}")
 
 
 @app.command()
