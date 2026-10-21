@@ -63,6 +63,28 @@ def test_missing_mpv_is_actionable(tmp_path: Path) -> None:
         engine.start()
 
 
+def test_player_client_rejects_missing_mpv_before_forking(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    from myne.config import Config
+    from myne.playback.client import PlayerClient
+    client = PlayerClient(Config(tmp_path / "data", tmp_path / "runtime", mpv_binary=str(tmp_path / "missing")))
+    monkeypatch.setattr(client, "_reachable", lambda: False)
+    launch = Mock()
+    monkeypatch.setattr("myne.playback.client.subprocess.Popen", launch)
+    with pytest.raises(PlaybackError, match="mpv is missing"):
+        client.ensure_running()
+    launch.assert_not_called()
+
+
+def test_existing_player_is_usable_even_if_binary_is_no_longer_on_path(tmp_path, monkeypatch):
+    from myne.config import Config
+    from myne.playback.client import PlayerClient
+    client = PlayerClient(Config(tmp_path / "data", tmp_path / "runtime", mpv_binary=str(tmp_path / "missing")))
+    monkeypatch.setattr(client, "_reachable", lambda: True)
+    client.ensure_running()
+
+
 @pytest.mark.parametrize("data", [[], None, "unexpected", 7])
 def test_player_client_rejects_invalid_command_data_without_crashing(tmp_path, monkeypatch, data):
     from myne.config import Config

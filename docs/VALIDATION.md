@@ -1,5 +1,28 @@
 # Validation record
 
+## Version 0.5.1 output and playback diagnostics
+
+The silent `python -m myne.cli --version` invocation was reproduced before the
+fix; both supported module entry points now print the installed version.
+Playback commands show progress before remote lookups, distinguish loading from
+playing, report failures with a nonzero exit code, and retain clean JSON output.
+
+The local Python 3.12 run passed **408 tests**, with two real-mpv skips and five
+filesystem Unix-socket cases excluded for the restriction described below.
+Twenty new regression cases cover module startup, missing mpv, engine startup
+failure, audio-device failure and queue retention, provider error redaction,
+explicit system certificate trust, and human/JSON playback feedback. Ruff and
+mypy pass across 31 application modules. The full CI suite retains socket and
+real-mpv integration coverage.
+
+A live metadata search succeeded. Stream extraction reproduced a certificate
+verification failure with the old default trust handling; honoring the explicit
+OpenSSL trust configuration removed that failure while retaining TLS
+verification. YouTube then required sign-in/account verification on this host.
+This is an upstream restriction, so live YouTube audio and physical speakers
+are not verified by this patch's checks. Fixed messages preserve the failure
+category without exposing signed stream URLs or authentication data.
+
 ## Version 0.5.0 visual refresh and listening room
 
 Real Textual screen captures cover the library and listening room at 144×42 and
