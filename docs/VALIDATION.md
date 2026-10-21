@@ -1,5 +1,24 @@
 # Validation record
 
+## Version 0.5.0 visual refresh and listening room
+
+Real Textual screen captures cover the library and listening room at 144×42 and
+80×24, the library at 100×30, and Studio, Midnight and Ember palettes. Preview
+metadata, lyrics and audio levels are explicitly labelled samples. The vinyl
+graphic is generated locally in terminal cells and performs no network requests.
+
+Four new interaction regressions cover current-song controls and retained
+selection, compact lyrics without preference changes, resizing without refetching
+or playback mutations, literal collection metadata and modal shortcut isolation.
+The resize test caught stale App.size during Resize delivery; breakpoint changes
+now wait until the screen has the new size. Table reflow reserves scrollbar space
+so compact results do not lose rows to an unnecessary horizontal scrollbar.
+
+The local Python 3.12 suite passed 387 tests, with two real-mpv skips and the
+same five filesystem-socket exclusions documented below. Ruff and mypy pass
+across 31 application modules. Full filesystem-socket and real-mpv coverage
+remains enabled in the Python 3.12/3.13 CI matrix.
+
 ## Version 0.4.0 settings, updater and bug review
 
 The first full local suite passed 379 tests on Python 3.12.14, with two real-mpv

@@ -1225,3 +1225,120 @@ def test_slow_preferences_do_not_overwrite_a_sidebar_choice_made_during_startup(
             assert app.query_one("#sidebar").display
             assert app.theme == "myne-ember"
     asyncio.run(scenario())
+
+
+def test_listening_room_controls_current_song_and_restores_library_selection():
+    async def scenario():
+        service = FakeApplication()
+        service.current = service.tracks[0]
+        app = MyneApp(service, reduced_motion=True)  # type: ignore[arg-type]
+        async with app.run_test(size=(144, 42)) as pilot:
+            await settle(app)
+            app.search_music("test")
+            await settle(app)
+            table = app.query_one("#results", DataTable)
+            table.move_cursor(row=1)
+            table.focus()
+            await pilot.pause()
+            await pilot.press("f3")
+            assert app.query_one("#listening-stage").display
+            assert not app.query_one("#sidebar").display
+            assert not app.query_one("#results-pane").display
+            assert app.query_one("#lyrics-pane").display
+            assert "Numb" in str(app.query_one("#listening-title", Static).render())
+            await pilot.press("f", "space")
+            await settle(app)
+            assert service.liked == [service.tracks[0]]
+            assert service.paused
+            await pilot.press("f3")
+            await pilot.pause()
+            assert app.query_one("#sidebar").display
+            assert app.query_one("#results-pane").display
+            assert app._selected_result == 1
+            assert table.cursor_row == 1
+            assert service.current == service.tracks[0]
+    asyncio.run(scenario())
+
+
+def test_compact_listening_lyrics_do_not_change_saved_browse_preferences():
+    async def scenario():
+        service = FakeApplication()
+        service.current = service.tracks[0]
+        app = MyneApp(service, reduced_motion=True)  # type: ignore[arg-type]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(app)
+            before = app._preferences
+            await pilot.press("f3")
+            assert app.query_one("#listening-stage").display
+            assert not app.query_one("#lyrics-pane").display
+            await pilot.press("l")
+            assert app.query_one("#lyrics-pane").display
+            assert not app.query_one("#listening-stage").display
+            assert app._preferences == before
+            await pilot.press("f3")
+            await pilot.pause()
+            assert app.query_one("#results-pane").display
+            assert not app.query_one("#lyrics-pane").display
+            assert app.query_one("#player").region.bottom <= 23
+            assert app.query_one("#stop").region.right <= 80
+            await pilot.press("f3", "ctrl+f")
+            assert not app._listening
+            assert app.focused is app.query_one("#search")
+    asyncio.run(scenario())
+
+
+def test_listening_resize_reflows_without_refetch_or_playback_changes():
+    async def scenario():
+        service = FakeApplication()
+        service.current = service.tracks[0]
+        service.up_next = service.tracks * 4
+        app = MyneApp(service, reduced_motion=True)  # type: ignore[arg-type]
+        async with app.run_test(size=(144, 42)) as pilot:
+            await settle(app)
+            app.search_music("test")
+            await settle(app)
+            searches = [call for call in service.calls if call[0] == "search"]
+            await pilot.press("f3")
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            assert app.query_one("#listening-stage").display
+            assert not app.query_one("#lyrics-pane").display
+            assert app.query_one("#stop").region.bottom <= 23
+            await pilot.resize_terminal(144, 42)
+            await pilot.pause()
+            assert app.query_one("#lyrics-pane").display
+            await pilot.press("f3")
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            assert app.query_one("#results-pane").display
+            assert not app.query_one("#results", DataTable).show_horizontal_scrollbar
+            assert [call for call in service.calls if call[0] == "search"] == searches
+            assert service.up_next == service.tracks * 4
+            assert service.current == service.tracks[0]
+    asyncio.run(scenario())
+
+
+def test_settings_modal_blocks_listening_shortcut_and_collection_metadata_is_literal():
+    async def scenario():
+        service = FakeApplication()
+        name = "[red]Literal\ncollection"
+        service.saved[name] = service.tracks
+        app = MyneApp(service)  # type: ignore[arg-type]
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(app)
+            app.open_playlist(name)
+            await settle(app)
+            title = app.query_one("#collection-title", Static)
+            assert "[red]Literal collection" in str(title.render())
+            assert "2 tracks" in str(app.query_one("#collection-meta", Static).render())
+            await pilot.press("f2")
+            await pilot.pause()
+            screen = app.screen
+            await pilot.press("f3")
+            assert app.screen is screen
+            assert not app._listening
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("f3")
+            assert app._listening
+    asyncio.run(scenario())

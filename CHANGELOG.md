@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0
+
+- A refreshed Studio workspace with collection headings, source and duration
+  summaries, roomier sidebar navigation, numbered two-line queue entries, quiet
+  scrollbars, clearer focus borders, and a player dock centered on pause/resume.
+- A listening room from F3, the masthead, or the command palette. MYNE's static
+  vinyl motif, song/artist/album details and synchronized lyrics share the stage;
+  the graphic is not provider artwork or an audio measurement.
+- Compact listening switches between the record and lyrics with `l`. F3 returns
+  to the library with its selection intact; Ctrl+F returns directly to search.
+  Listening-mode likes target the current song, and its lyrics toggle does not
+  change saved library preferences. Modal dialogs block the F3 shortcut.
+- Reflow existing result and queue metadata after sidebar/terminal size changes,
+  without searching again or changing playback. Wait for the new screen size
+  before applying breakpoints, and prevent compact horizontal table overflow.
+- Retain Studio, Midnight and Ember, real mpv measurements, reduced motion,
+  playlist imports, saved settings and update controls.
+
 ## 0.4.0
 
 - Settings screen from the masthead, F2, or command palette, with Appearance,

@@ -29,6 +29,7 @@ from myne.models import Playlist, Track
 from myne.motion import AudioMotion, reduced_motion_requested
 from myne.playlists import ImportResult, playlist_link
 from myne.preferences import Preferences
+from myne.ui.record import RecordArt
 from myne.ui.screens import ImportPlaylistScreen, SaveQueueScreen
 from myne.ui.settings import SettingsScreen
 from myne.ui.themes import THEME_NAMES, THEMES
@@ -156,6 +157,7 @@ class MyneApp(App[None]):
         Binding("ctrl+b", "sidebar", "Sidebar", priority=True, show=False),
         Binding("ctrl+o", "import_playlist", "Import", priority=True, show=False),
         Binding("f2", "settings", "Settings", priority=True, show=False),
+        Binding("f3", "listening", "Listen", priority=True, show=False),
         Binding("1", "discover", "Discover", show=False),
         Binding("2", "favorites", "Liked", show=False),
         Binding("3", "recent", "Recent", show=False),
@@ -195,6 +197,9 @@ class MyneApp(App[None]):
         self._explicit_reduced_motion = reduced_motion
         self._library_loading = False
         self._view = "discover"
+        self._listening = False
+        self._listening_lyrics: bool | None = None
+        self._search_heading = "Find your next favorite."
         self._discover_results: list[Track] = []
         self._favorites: set[tuple[str, str]] = set()
         self._playlist_names: list[str] = []
@@ -245,7 +250,8 @@ class MyneApp(App[None]):
             with Vertical(id="header-right"):
                 yield Static("READY TO LISTEN", id="session-state", markup=False)
                 with Horizontal(id="header-buttons"):
-                    yield Button("☰ Library", id="sidebar-toggle", tooltip="Toggle the library sidebar · Ctrl+B")
+                    yield Button("Library", id="sidebar-toggle", tooltip="Toggle the library sidebar · Ctrl+B")
+                    yield Button("Listen", id="listening-toggle", tooltip="Focused listening view · F3")
                     yield Button("Commands", id="commands", tooltip="Find any action · Ctrl+K")
                     yield Button("Theme", id="theme", tooltip="Switch the color palette · t")
                     yield Button("Settings", id="settings", tooltip="Preferences and updates · F2")
@@ -269,8 +275,20 @@ class MyneApp(App[None]):
                     for view, label in (("discover", "1 Discover"), ("favorites", "2 Liked"),
                                         ("recent", "3 Recent"), ("playlists", "4 Playlists")):
                         yield Button(label, id=f"tab-{view}", classes="view-button" + (" selected" if view == "discover" else ""))
+                with Horizontal(id="collection-header"):
+                    yield Static("◈", id="collection-mark", markup=False)
+                    with Vertical(id="collection-copy"):
+                        yield Static("Find your next favorite.", id="collection-title", markup=False)
+                        yield Static("Search a song, artist, or mood to begin.", id="collection-meta", markup=False)
                 yield Static("Search for music or open your library. Ctrl+K finds every action.", id="status", markup=False)
                 with Horizontal(id="library"):
+                    with Vertical(id="listening-stage", classes="pane"):
+                        yield Static("THE LISTENING ROOM", id="listening-label", markup=False)
+                        yield RecordArt(id="record-art")
+                        yield Static("Make room for your next favorite.", id="listening-title", markup=False)
+                        yield Static("Search for a song or start your queue.", id="listening-artist", markup=False)
+                        yield Static("", id="listening-album", markup=False)
+                        yield Static("Space pause / resume · n next · F3 back to library", id="listening-hint", markup=False)
                     with Vertical(id="results-pane", classes="pane"):
                         with Horizontal(id="playlist-tools"):
                             yield Button("‹ All", id="playlist-back", tooltip="Browse all playlists")
@@ -281,7 +299,7 @@ class MyneApp(App[None]):
                         yield DataTable(id="results", cursor_type="row", zebra_stripes=True)
                         yield Static("A song, an artist, a mood. Start with a search.", id="results-empty", classes="empty", markup=False)
                     with Vertical(id="queue-pane", classes="pane"):
-                        yield DataTable(id="queue", cursor_type="row")
+                        yield DataTable(id="queue", cursor_type="row", show_header=False)
                         yield Static("Add tracks with a or + Queue.", id="queue-empty", classes="empty", markup=False)
                         with Horizontal(id="queue-tools"):
                             yield Button("↑", id="queue-up", tooltip="Move selected queued track up · Alt+Up")
@@ -339,7 +357,8 @@ class MyneApp(App[None]):
 
     def on_resize(self, event: Resize) -> None:
         if self.screen_stack and self._main_screen.query("#lyrics-pane"):
-            self._layout_lyrics()
+            # App.size still describes the previous screen during this event.
+            self.call_after_refresh(self._layout_lyrics)
 
     async def on_unmount(self) -> None:
         if self._visualizer_connected:
@@ -350,25 +369,50 @@ class MyneApp(App[None]):
 
     def _layout_lyrics(self) -> None:
         sidebar = self._sidebar_override if self._sidebar_override is not None else self.size.width >= 100
+        sidebar = sidebar and not self._listening
         self._main_screen.query_one("#sidebar").display = sidebar
-        self._main_screen.query_one("#view-tabs").display = not sidebar
+        self._main_screen.query_one("#view-tabs").display = not sidebar and not self._listening
         self._main_screen.set_class(self.size.height < 29, "compact")
+        self._main_screen.set_class(self._listening, "listening")
+        self._main_screen.query_one("#search").display = not self._listening
+        self._main_screen.query_one("#collection-header").display = not self._listening and self.size.height >= 29
+        self._main_screen.query_one("#listening-stage").display = self._listening
         available = self.size.width - (24 if sidebar else 0)
         wide = available >= 90
         if not self._lyrics_user_toggled:
             self._lyrics_visible = wide
         compact_lyrics = self._lyrics_visible and not wide
-        self._main_screen.query_one("#results-pane").display = not compact_lyrics
-        self._main_screen.query_one("#queue-pane").display = available >= 68 and not compact_lyrics
+        self._main_screen.query_one("#results-pane").display = not compact_lyrics and not self._listening
+        self._main_screen.query_one("#queue-pane").display = available >= 68 and not compact_lyrics and not self._listening
         pane = self._main_screen.query_one("#lyrics-pane")
         was_visible = pane.display
-        pane.display = self._lyrics_visible
+        pane.display = (self._listening_lyrics if self._listening_lyrics is not None else
+                        self._lyrics_visible if self._lyrics_user_toggled else self.size.width >= 100) if self._listening else self._lyrics_visible
+        if self._listening and self.size.width < 100:
+            self._main_screen.query_one("#listening-stage").display = not pane.display
         if self._lyrics_visible and not was_visible and not self._reduced_motion:
             pane.styles.opacity = 0.0
             pane.styles.animate("opacity", 1.0, duration=0.14, easing="out_cubic", level="basic")
-        self._main_screen.query_one("#library").set_class(compact_lyrics, "compact-lyrics")
-        if self._lyrics_visible:
+        self._main_screen.query_one("#library").set_class(compact_lyrics and not self._listening, "compact-lyrics")
+        self._main_screen.query_one("#listening-toggle", Button).label = "‹ Browse" if self._listening else "Listen"
+        if pane.display:
             self.call_after_refresh(self._render_lyrics, force=True)
+        self.call_after_refresh(self._fit_tables)
+
+    def _fit_tables(self) -> None:
+        """Reflow existing metadata after layout changes without fetching again."""
+        if self._main_screen.query_one("#results-pane").display and not self._library_loading and self._view != "playlists":
+            self._render_tracks(self.results, preserve_selection=True)
+        if self._main_screen.query_one("#queue-pane").display:
+            self._render_queue_table()
+
+    def action_listening(self) -> None:
+        self._listening = not self._listening
+        if self._listening:
+            self._listening_lyrics = None
+        self._layout_lyrics()
+        self._main_screen.query_one("#pause" if self._listening else "#results").focus()
+        self._status("Listening room · F3 returns to your library · l toggles lyrics" if self._listening else "Back to your library · F3 opens the listening room")
 
     def _status(self, message: str, *, error: bool = False) -> None:
         widget = self._main_screen.query_one("#status", Static)
@@ -380,7 +424,7 @@ class MyneApp(App[None]):
             if action == "quit" and isinstance(self.screen, SettingsScreen) and self.screen.installing_update:
                 return False
             if action in {
-                "search_focus", "command_palette", "sidebar", "import_playlist", "settings",
+                "search_focus", "command_palette", "sidebar", "import_playlist", "settings", "listening",
                 "discover", "favorites", "recent", "playlists", "favorite", "repeat", "shuffle",
                 "theme", "seek_back", "seek_forward", "queue_remove", "queue_up", "queue_down",
                 "enqueue", "play", "toggle_pause", "next", "volume_down", "volume_up", "mute",
@@ -392,6 +436,8 @@ class MyneApp(App[None]):
     def _apply_preferences(self, preferences: Preferences) -> None:
         self._preferences = preferences
         self.theme = preferences.theme
+        self._main_screen.query_one("#record-art").refresh()
+        self._listening_lyrics = None
         self._sidebar_override = {"auto": None, "show": True, "hide": False}[preferences.sidebar]
         self._lyrics_user_toggled = preferences.lyrics != "auto"
         if self._lyrics_user_toggled:
@@ -458,6 +504,7 @@ class MyneApp(App[None]):
             ("Import playlist link", "Spotify, YouTube Music, YouTube or SoundCloud", self.action_import_playlist),
             ("Toggle sidebar", "Show your library and playlists", self.action_sidebar),
             ("Settings", "Appearance, playback preferences and updates", self.action_settings),
+            ("Listening room", "Vinyl view and lyrics · F3 returns to your library", self.action_listening),
             ("Like / unlike track", "Save the selected track or current song", self.action_favorite),
             ("Save queue", "Give the upcoming queue a name", self.action_save_playlist),
             ("Shuffle queue", "Randomize upcoming tracks", self.action_shuffle),
@@ -475,6 +522,9 @@ class MyneApp(App[None]):
             yield SystemCommand(title, help_text, callback)
 
     def _activate_view(self, view: str) -> None:
+        if self._listening:
+            self._listening = False
+            self._layout_lyrics()
         self._view = view
         self._open_playlist = None
         self._library_loading = view in {"playlist", "playlists", "favorites", "recent"}
@@ -497,17 +547,21 @@ class MyneApp(App[None]):
         for button in self._main_screen.query(".view-button"):
             selected_view = "playlists" if view == "playlist" else view
             button.set_class(button.id in {f"rail-{selected_view}", f"tab-{selected_view}"}, "selected")
+        self._render_collection()
 
-    def _render_tracks(self, tracks: list[Track]) -> None:
+    def _render_tracks(self, tracks: list[Track], *, preserve_selection: bool = False) -> None:
+        selected = self._selected_result if preserve_selection else 0
         self._library_loading = False
         self.results = list(tracks)
         self._playlist_names = []
-        self._selected_result = 0
+        self._selected_result = min(selected, max(0, len(tracks) - 1))
         table = self._main_screen.query_one("#results", DataTable)
         table.clear(columns=True)
-        width = self._main_screen.query_one("#results-pane").size.width or 50
+        # Reserve one column for the vertical scrollbar; never force a
+        # horizontal scrollbar into the few rows available in compact mode.
+        width = (table.size.width or 48) - 1
         artist_width = max(6, width // 3 - 3)
-        table.add_column("Track", width=max(10, width - artist_width - 17))
+        table.add_column("Track", width=max(8, width - artist_width - 14))
         table.add_column("Artist", width=artist_width)
         table.add_column("Time", width=5)
         table.add_column("♥", width=1)
@@ -517,6 +571,8 @@ class MyneApp(App[None]):
                           Text(_plain(", ".join(track.artists) or "Unknown"), no_wrap=True, overflow="ellipsis"),
                           Text(_clock(track.duration)), Text("♥" if liked else "", style=self.current_theme.primary),
                           key=str(index))
+        if tracks:
+            table.move_cursor(row=self._selected_result)
         titles = {"discover": "DISCOVER", "favorites": "LIKED TRACKS", "recent": "RECENTLY PLAYED",
                   "playlist": _plain(self._open_playlist.name) if self._open_playlist else "PLAYLIST"}
         self._main_screen.query_one("#results-pane").border_title = Text(titles.get(self._view, "DISCOVER"))
@@ -529,6 +585,26 @@ class MyneApp(App[None]):
         empty.update(messages.get(self._view, "Your library is empty."))
         self._update_library_counts()
         self._update_favorite_label()
+        self._render_collection()
+
+    def _render_collection(self) -> None:
+        titles = {"discover": self._search_heading, "favorites": "The ones you love.",
+                  "recent": "Back in rotation.", "playlists": "Your collections.",
+                  "playlist": self._open_playlist.name if self._open_playlist else "Opening your collection…"}
+        title = titles.get(self._view, "Your music.")
+        if self._view == "playlists":
+            meta = f"{len(self._playlist_names)} playlists · Import a link with Ctrl+O"
+        elif self._library_loading:
+            meta = "Opening your library…"
+        elif self.results:
+            durations = [track.duration for track in self.results if track.duration is not None]
+            duration = f" · {_clock(sum(durations))}" if durations else ""
+            source = f" · {self._open_playlist.source}" if self._open_playlist else ""
+            meta = f"{len(self.results)} tracks{duration}{source} · Enter to play"
+        else:
+            meta = "Search a song, artist, or mood. Paste a playlist link to import."
+        self._main_screen.query_one("#collection-title", Static).update(_plain(title))
+        self._main_screen.query_one("#collection-meta", Static).update(_plain(meta))
 
     def _update_library_counts(self) -> None:
         self._main_screen.query_one("#library-count", Static).update(
@@ -582,6 +658,7 @@ class MyneApp(App[None]):
         self.load_library("playlists")
 
     def action_sidebar(self) -> None:
+        self._listening = False
         self._sidebar_override = not self._main_screen.query_one("#sidebar").display
         self._preferences = replace(self._preferences, sidebar="show" if self._sidebar_override else "hide")
         self._preference_overrides.add("sidebar")
@@ -695,6 +772,7 @@ class MyneApp(App[None]):
                     table.add_row(Text(_plain(name)), str(count), key=str(index))
                 self._main_screen.query_one("#results-pane").border_title = "YOUR PLAYLISTS"
                 self._main_screen.query_one("#results-pane").border_subtitle = "Enter to open · Ctrl+O to import"
+                self._render_collection()
                 empty = self._main_screen.query_one("#results-empty", Static)
                 empty.display = not bool(playlists)
                 empty.update("Import a playlist link, or Save your upcoming queue.")
@@ -753,6 +831,7 @@ class MyneApp(App[None]):
         self._theme_user_changed = True
         index = THEME_NAMES.index(self.theme) if self.theme in THEME_NAMES else -1
         self.theme = THEME_NAMES[(index + 1) % len(THEME_NAMES)]
+        self._main_screen.query_one("#record-art").refresh()
         self._preferences = replace(self._preferences, theme=self.theme)
         self._audio_rendered = None
         self._render_lyrics(force=True)
@@ -850,6 +929,7 @@ class MyneApp(App[None]):
     async def search_music(self, query: str) -> None:
         """Cancelling a search discards its result without blocking the UI."""
         self._status("Searching…")
+        self._search_heading = f"Results for {query}" if not query.startswith("/") else query.split(" ", 1)[-1].capitalize() + " mix"
         if not query.startswith("/radio "):
             self._activate_view("discover")
         try:
@@ -909,6 +989,8 @@ class MyneApp(App[None]):
         self.action_play()
 
     def _selected(self) -> list[Track]:
+        if self._listening:
+            return []
         focused = self.focused
         source = focused.id if isinstance(focused, DataTable) else self._selection_source
         if source == "queue":
@@ -924,6 +1006,9 @@ class MyneApp(App[None]):
         return []
 
     def action_search_focus(self) -> None:
+        if self._listening:
+            self._listening = False
+            self._layout_lyrics()
         self._main_screen.query_one("#search", Input).focus()
 
     def action_play(self) -> None:
@@ -989,6 +1074,7 @@ class MyneApp(App[None]):
             "theme": self.action_theme,
             "settings": self.action_settings,
             "sidebar-toggle": self.action_sidebar,
+            "listening-toggle": self.action_listening,
             "import-playlist": self.action_import_playlist,
             "playlist-import": self.action_import_playlist,
             "playlist-back": self.action_playlists,
@@ -1037,19 +1123,12 @@ class MyneApp(App[None]):
             self._show_playback(snapshot)
             tracks = list(queue)
             if tracks != self.queued:
-                table = self._main_screen.query_one("#queue", DataTable)
                 self.queued = tracks
-                table.clear()
-                for index, track in enumerate(tracks):
-                    table.add_row(
-                        Text(_plain(f"{index + 1}. {track.title} · {', '.join(track.artists)}")),
-                        key=str(index),
-                    )
                 self._selected_queue = min(self._selected_queue, max(0, len(tracks) - 1))
-                if tracks:
-                    table.move_cursor(row=self._selected_queue)
+                self._render_queue_table()
             self._main_screen.query_one("#queue-empty").display = not bool(tracks)
             self._main_screen.query_one("#queue-pane").border_title = f"MY QUEUE · {len(tracks)}"
+            self._main_screen.query_one("#queue-pane").border_subtitle = f"{_clock(sum(track.duration or 0 for track in tracks))} queued" if tracks else "a to add tracks"
             self._update_library_counts()
             for button_id in ("queue-up", "queue-down", "queue-remove", "queue-save"):
                 self._main_screen.query_one(f"#{button_id}", Button).disabled = not bool(tracks)
@@ -1058,6 +1137,18 @@ class MyneApp(App[None]):
             self._status(f"Playback unavailable: {exc}", error=True)
         finally:
             self._refreshing = False
+
+    def _render_queue_table(self) -> None:
+        table = self._main_screen.query_one("#queue", DataTable)
+        table.clear(columns=True)
+        table.add_column("Up next", width=max(8, (table.size.width or 24) - 7))
+        compact = self.size.height < 29
+        for index, track in enumerate(self.queued):
+            label = Text(_plain(track.title), style="bold", no_wrap=True, overflow="ellipsis")
+            label.append((" · " if compact else "\n") + _plain(", ".join(track.artists) or "Unknown artist"), style="not bold dim")
+            table.add_row(label, label=Text(f"{index + 1:02}", style="dim"), height=1 if compact else 2, key=str(index))
+        if self.queued:
+            table.move_cursor(row=self._selected_queue)
 
     def _read_playback(self) -> tuple[dict[str, Any], list[Track]]:
         return self.service.now(), self.service.queue()
@@ -1073,8 +1164,14 @@ class MyneApp(App[None]):
             self._main_screen.query_one("#now", Static).update(
                 _plain(f"{state} {track.get('title', 'Unknown track')} · {artists}{radio}")
             )
+            self._main_screen.query_one("#listening-title", Static).update(_plain(track.get("title") or "Unknown track"))
+            self._main_screen.query_one("#listening-artist", Static).update(_plain(artists or "Unknown artist"))
+            self._main_screen.query_one("#listening-album", Static).update(_plain(track.get("album") or ""))
         else:
             self._main_screen.query_one("#now", Static).update("Nothing playing · search to begin")
+            self._main_screen.query_one("#listening-title", Static).update("Make room for your next favorite.")
+            self._main_screen.query_one("#listening-artist", Static).update("Search for a song or start your queue.")
+            self._main_screen.query_one("#listening-album", Static).update("")
         volume = snapshot.get("volume", 70)
         muted = snapshot.get("muted", False)
         self._main_screen.query_one("#volume-label", Static).update(
@@ -1368,7 +1465,7 @@ class MyneApp(App[None]):
                 text.append("\n")
             body.update(text)
             source.update(_plain(f"{document.source} · synced · l hides"))
-            if not self._lyrics_visible:
+            if not self._main_screen.query_one("#lyrics-pane").display:
                 return
             scroll = self._main_screen.query_one("#lyrics-scroll", VerticalScroll)
             width = max(1, body.size.width or scroll.size.width - 2)
@@ -1399,7 +1496,7 @@ class MyneApp(App[None]):
             source.update(_plain(f"{document.source} · plain lyrics · scroll ↑ ↓"))
 
     def _scroll_lyrics_to(self, target: int, key: tuple[str, str] | None, index: int, animate: bool) -> None:
-        if self._lyrics_key != key or self._lyric_index != index or not self._lyrics_visible:
+        if self._lyrics_key != key or self._lyric_index != index or not self._main_screen.query_one("#lyrics-pane").display:
             return
         self._main_screen.query_one("#lyrics-scroll", VerticalScroll).scroll_to(
             y=target,
@@ -1422,6 +1519,7 @@ class MyneApp(App[None]):
                 "Ctrl+B       Show / hide the sidebar at any terminal size\n"
                 "Ctrl+O       Import a playlist link\n"
                 "F2           Settings and update checks\n"
+                "F3           Listening room / return to library\n"
                 "Enter        Search; play a selected result or queue track\n"
                 "↑ / ↓        Select tracks\n"
                 "Tab          Move between panes and controls\n"
@@ -1458,6 +1556,12 @@ class MyneApp(App[None]):
         )
 
     def action_lyrics(self) -> None:
+        if self._listening:
+            self._listening_lyrics = not self._main_screen.query_one("#lyrics-pane").display
+            self._layout_lyrics()
+            self._main_screen.query_one("#lyrics-scroll" if self._listening_lyrics else "#pause").focus()
+            self._status("Listening room · l toggles lyrics · F3 returns to your library")
+            return
         self._lyrics_user_toggled = True
         self._lyrics_visible = not self._lyrics_visible
         self._preferences = replace(self._preferences, lyrics="show" if self._lyrics_visible else "hide")
@@ -1468,7 +1572,7 @@ class MyneApp(App[None]):
             self._render_lyrics(force=True)
             self._status("Live lyrics · l returns to tracks · Tab moves focus · ↑ ↓ scroll plain lyrics")
         else:
-            self._main_screen.query_one("#results", DataTable).focus()
+            self._main_screen.query_one("#pause" if self._listening else "#results").focus()
             self._status("Lyrics hidden · press l to show")
 
     def action_stats(self) -> None:

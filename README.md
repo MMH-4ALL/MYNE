@@ -134,6 +134,21 @@ but cannot recover uncommitted listening seconds.
 
 ## TUI
 
+### Listening room
+
+Press **F3** or click **Listen** for a focused player with MYNE's vinyl graphic,
+song, artist, album and synchronized lyrics. Space pauses/resumes, `n` skips,
+and `f` likes the current song. **F3** brings back your library and selection;
+**Ctrl+F** returns directly to search. In compact terminals, `l` switches
+between the record and lyrics. This toggle leaves saved library preferences alone.
+The vinyl is a static MYNE graphic, not provider album artwork. Audio meters
+continue to display measured mpv levels, and all motion respects reduced motion.
+
+![MYNE listening room with a vinyl graphic, sample song metadata, synchronized lyrics and player controls](docs/listening.svg)
+
+*Actual Textual UI capture with sample metadata, original lyrics and sample
+audio measurements; no live playback was used for this preview.*
+
 ### Settings and updates
 
 Open **Settings** from the masthead, press **F2**, or find Settings in **Ctrl+K**.
@@ -178,7 +193,9 @@ myne --json update
 
 ### Music workspace
 
-Version 0.3 adds a Studio workspace with a playlist sidebar, visible by default
+Version 0.5 refreshes the Studio workspace with collection headings, total
+durations, source labels, numbered queue entries and a clearer player dock.
+The playlist sidebar is visible by default
 at widths of 100 columns or more. `Ctrl+B` or the Library button toggles it at
 any size; narrow terminals retain the view tabs. Studio, Midnight and Ember themes keep a single
 accent throughout the workspace; `t` switches themes and saves your choice.
