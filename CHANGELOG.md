@@ -21,6 +21,9 @@
   User choices made during startup survive a delayed preferences load.
 - Player client rejects invalid response data with a normal playback error;
   idle volume reporting now reflects the saved setting.
+- Audio measurements use transport state sampled after the levels read, and
+  clear measurements if the player has since paused or become idle. This fixes
+  inconsistent visualizer status during buffering/start/stop transitions.
 - Modal screens retain keyboard focus and reject underlying music shortcuts.
 
 ## 0.3.1

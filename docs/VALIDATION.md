@@ -22,6 +22,11 @@ workspace's editable installation and supplied manual instructions. No newer
 official version was installed live. Physical speaker routing remains a
 separate device check. Ruff and mypy pass across 30 application modules.
 
+Full CI exposed a real-mpv start/buffering race in the 3.12 run: measurements
+could be marked available alongside an earlier idle status. Two deterministic
+start/stop regressions failed before the fix. Measurements now use the later
+transport snapshot and clear themselves if playback has stopped or paused.
+
 The settings UI was rendered at 144×42 and 80×24 for Appearance, Playback and
 Updates. The settings preview explicitly labels its sample update status;
 the example 0.4.1 update in the image is not a published release claim.

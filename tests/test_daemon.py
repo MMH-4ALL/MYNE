@@ -127,6 +127,21 @@ def test_volume_changes_restore_sound_and_mute_is_controllable(player: tuple) ->
     assert service.dispatch("mute", value=False)["muted"] is False
 
 
+@pytest.mark.parametrize("starting", [True, False])
+def test_audio_measurement_uses_transport_state_after_sampling(player: tuple, monkeypatch, starting):
+    service, _, engine, _, _ = player
+    service.dispatch("play", tracks=[Track("a", "Track").to_dict()])
+    engine.playing = not starting
+    def levels():
+        engine.playing = starting
+        return {"available": True, "rms": [0.5], "peak": [0.7], "error": None}
+    monkeypatch.setattr(engine, "audio_levels", levels)
+    packet = service.dispatch("levels")
+    assert packet["playing"] is starting
+    assert packet["available"] is starting
+    assert packet["rms"] == ([0.5] if starting else [])
+
+
 @pytest.mark.parametrize("payload", [{"delta": True}, {"delta": float("nan")}, {"value": 20, "delta": 5}])
 def test_volume_adjustment_rejects_invalid_requests(player: tuple, payload: dict) -> None:
     service, *_ = player

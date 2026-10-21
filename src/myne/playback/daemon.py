@@ -289,7 +289,6 @@ class PlayerService:
                     if not isinstance(enabled, bool):
                         raise PlaybackError("Visualizer enabled must be true or false.")
                     self.engine.enable_visualizer(enabled)
-                state = self.now()
                 try:
                     levels = (
                         self.engine.audio_levels()
@@ -303,6 +302,12 @@ class PlayerService:
                         "peak": [],
                         "error": "Audio measurements are temporarily unavailable.",
                     }
+                # mpv can leave buffering or stop while measurements are read.
+                # Pair them with the later transport state, and never emit
+                # active measurements alongside a paused/idle status packet.
+                state = self.now()
+                if not state.get("playing") or state.get("paused"):
+                    levels = {**levels, "available": False, "rms": [], "peak": []}
                 return {
                     **levels,
                     "track_id": self._active.id if self._active else None,
