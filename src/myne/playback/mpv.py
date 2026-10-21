@@ -41,10 +41,13 @@ class MpvEngine:
         binary: str = "mpv",
         volume: int = 70,
         timeout: float = 5.0,
+        audio_output: str | None = None,
     ) -> None:
         self.socket_path = socket_path
         self.binary = binary
         self.volume = volume
+        self.muted = False
+        self.audio_output = audio_output
         self.timeout = timeout
         self.process: subprocess.Popen[bytes] | None = None
         self._socket: socket.socket | None = None
@@ -85,6 +88,8 @@ class MpvEngine:
                             "--ytdl=no",
                             "--cache-on-disk=no",
                             f"--volume={self.volume}",
+                            f"--mute={'yes' if self.muted else 'no'}",
+                            *([f"--ao={self.audio_output}"] if self.audio_output else []),
                             f"--input-ipc-server={self.socket_path}",
                             f"--input-ipc-client=fd://{child_lifeline.fileno()}",
                         ],
@@ -230,6 +235,12 @@ class MpvEngine:
     def set_volume(self, value: int) -> None:
         self.volume = value
         self.command("set_property", "volume", value)
+        if value > 0:
+            self.set_mute(False)
+
+    def set_mute(self, value: bool) -> None:
+        self.command("set_property", "mute", value)
+        self.muted = value
 
     def stop(self) -> None:
         if self._socket is not None:
@@ -296,6 +307,9 @@ class MpvEngine:
                 "duration": None,
                 "paused": False,
                 "volume": self.volume,
+                "muted": self.muted,
+                "audio_output": None,
+                "audio_device": None,
                 "playing": False,
             }
         position = self.command("get_property", "time-pos", allow_unavailable=True)
@@ -303,11 +317,17 @@ class MpvEngine:
         paused = self.command("get_property", "pause", allow_unavailable=True)
         idle = self.command("get_property", "core-idle", allow_unavailable=True)
         volume = self.command("get_property", "volume", allow_unavailable=True)
+        muted = self.command("get_property", "mute", allow_unavailable=True)
+        output = self.command("get_property", "current-ao", allow_unavailable=True)
+        device = self.command("get_property", "audio-device", allow_unavailable=True)
         return {
             "position": float(position or 0),
             "duration": duration,
             "paused": bool(paused),
             "volume": self.volume if volume is None else float(volume),
+            "muted": self.muted if muted is None else bool(muted),
+            "audio_output": output,
+            "audio_device": device,
             "playing": idle is False and paused is False,
         }
 

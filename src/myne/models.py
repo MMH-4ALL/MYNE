@@ -49,6 +49,15 @@ class Artist:
 
 
 @dataclass(frozen=True, slots=True)
+class Playlist:
+    name: str
+    tracks: tuple[Track, ...] = ()
+    source: str = "Local"
+    source_url: str | None = None
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Stream:
     url: str
     headers: dict[str, str] = field(default_factory=dict)

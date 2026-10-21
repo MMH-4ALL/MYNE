@@ -28,6 +28,7 @@ class FakeEngine:
         self.playing = False
         self.position = 0.0
         self.volume = 70
+        self.muted = False
         self.events: list[dict[str, Any]] = []
         self.seeks: list[float] = []
         self.streams: list[Stream] = []
@@ -53,6 +54,11 @@ class FakeEngine:
 
     def set_volume(self, value: int) -> None:
         self.volume = value
+        if value:
+            self.muted = False
+
+    def set_mute(self, value: bool) -> None:
+        self.muted = value
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -60,6 +66,7 @@ class FakeEngine:
             "duration": 200,
             "paused": self.paused,
             "volume": self.volume,
+            "muted": self.muted,
             "playing": self.playing and not self.paused,
         }
 
@@ -107,6 +114,41 @@ def player(tmp_path: Path) -> tuple:
     return service, store, engine, provider, clock
 
 
+def test_volume_changes_restore_sound_and_mute_is_controllable(player: tuple) -> None:
+    service, store, engine, _, _ = player
+    service.dispatch("play", tracks=[Track("a", "Track").to_dict()])
+    assert service.dispatch("mute")["muted"] is True
+    assert service.dispatch("volume", delta=5)["muted"] is False
+    assert engine.volume == 75
+    assert store.get_setting("volume") == 75
+    assert service.dispatch("volume", delta=100)["volume"] == 100
+    assert service.dispatch("volume", delta=-100)["volume"] == 0
+    assert service.dispatch("volume", value=70)["volume"] == 70
+    assert service.dispatch("mute", value=False)["muted"] is False
+
+
+@pytest.mark.parametrize("starting", [True, False])
+def test_audio_measurement_uses_transport_state_after_sampling(player: tuple, monkeypatch, starting):
+    service, _, engine, _, _ = player
+    service.dispatch("play", tracks=[Track("a", "Track").to_dict()])
+    engine.playing = not starting
+    def levels():
+        engine.playing = starting
+        return {"available": True, "rms": [0.5], "peak": [0.7], "error": None}
+    monkeypatch.setattr(engine, "audio_levels", levels)
+    packet = service.dispatch("levels")
+    assert packet["playing"] is starting
+    assert packet["available"] is starting
+    assert packet["rms"] == ([0.5] if starting else [])
+
+
+@pytest.mark.parametrize("payload", [{"delta": True}, {"delta": float("nan")}, {"value": 20, "delta": 5}])
+def test_volume_adjustment_rejects_invalid_requests(player: tuple, payload: dict) -> None:
+    service, *_ = player
+    with pytest.raises(PlaybackError):
+        service.dispatch("volume", **payload)
+
+
 def test_end_file_advances_durable_queue(player: tuple) -> None:
     service, store, engine, _, clock = player
     first, second = Track("a", "First"), Track("b", "Second")
@@ -120,6 +162,45 @@ def test_end_file_advances_durable_queue(player: tuple) -> None:
     assert store.queue() == []
     assert store.stats()["listening_seconds"] == 40
     assert store.stats()["plays"] == 1
+
+
+@pytest.mark.parametrize("mode,expected,pending", [("one", "a", ["b"]), ("all", "b", ["a"])])
+def test_repeat_applies_only_to_natural_completion(player: tuple, mode: str, expected: str, pending: list) -> None:
+    service, store, engine, _, clock = player
+    first, second = Track("a", "First"), Track("b", "Second")
+    service.dispatch("play", tracks=[first.to_dict(), second.to_dict()])
+    service.dispatch("repeat", value=mode)
+    assert store.get_setting("repeat") == mode
+    clock[0] = 40
+    engine.events.append({"event": "end-file", "reason": "eof"})
+    service.tick()
+    assert service.now()["track"]["id"] == expected
+    assert [track.id for track in store.queue()] == pending
+    assert store.stats()["listening_seconds"] == 40
+    if mode == "one":
+        assert service.dispatch("next")["track"]["id"] == "b"
+
+
+def test_repeat_cycles_and_radio_disables_it(player: tuple) -> None:
+    service, store, *_ = player
+    assert service.dispatch("repeat")["repeat"] == "all"
+    assert service.dispatch("repeat")["repeat"] == "one"
+    assert service.dispatch("repeat")["repeat"] == "off"
+    with pytest.raises(PlaybackError, match="Repeat mode"):
+        service.dispatch("repeat", value="bad")
+    service.dispatch("repeat", value="all")
+    service.dispatch("radio", seed=Track("a", "Seed").to_dict())
+    assert service.now()["repeat"] == "off"
+    assert store.get_setting("repeat") == "off"
+
+
+def test_repeat_all_keeps_a_manually_skipped_track_at_the_end(player: tuple) -> None:
+    service, store, *_ = player
+    first, second = Track("a", "First"), Track("b", "Second")
+    service.dispatch("play", tracks=[first.to_dict(), second.to_dict()])
+    service.dispatch("repeat", value="all")
+    assert service.dispatch("next")["track"]["id"] == "b"
+    assert store.queue() == [first]
 
 
 def test_listening_time_excludes_pause_and_seek(player: tuple) -> None:
@@ -157,6 +238,89 @@ def test_radio_deduplicates_and_plain_play_disables_it(player: tuple) -> None:
     service.dispatch("play", tracks=[Track("c", "Chosen").to_dict()])
     assert not service.now()["radio"]
     assert store.queue() == [related]
+
+
+def test_play_queued_skips_earlier_entries_without_copying_the_tail(player: tuple) -> None:
+    service, store, engine, _, _ = player
+    current = Track("current", "Current")
+    first, selected, last = (Track(str(i), f"Queued {i}") for i in range(3))
+    service.dispatch("play", tracks=[current.to_dict()])
+    store.enqueue([first, selected, last])
+
+    result = service.dispatch("play_queued", index=1, expected=selected.to_dict())
+
+    assert result["track"]["id"] == selected.id
+    assert store.current() == selected
+    assert store.queue() == [last]
+    engine.events.append({"event": "end-file", "reason": "eof"})
+    service.tick()
+    assert store.current() == last
+    assert store.queue() == []
+
+
+def test_stale_queue_selection_keeps_the_current_song_and_queue(player: tuple) -> None:
+    service, store, _, _, _ = player
+    current, selected, replacement = (Track(str(i), f"Song {i}") for i in range(3))
+    service.dispatch("play", tracks=[current.to_dict()])
+    store.enqueue([replacement])
+
+    with pytest.raises(PlaybackError, match="queue changed"):
+        service.dispatch("play_queued", index=0, expected=selected.to_dict())
+
+    assert store.current() == current
+    assert store.queue() == [replacement]
+
+
+@pytest.mark.parametrize("index", [None, True, -1, 1.5, "1"])
+def test_invalid_queue_selection_cannot_trim_the_queue(player: tuple, index: Any) -> None:
+    service, store, _, _, _ = player
+    track = Track("queued", "Queued")
+    store.enqueue([track])
+    with pytest.raises(PlaybackError, match="Queue index"):
+        service.dispatch("play_queued", index=index, expected=track.to_dict())
+    assert store.queue() == [track]
+    assert store.current() is None
+
+
+@pytest.mark.parametrize("action", ["stop", "next", "play"])
+def test_commands_recover_when_mpv_disconnects_before_the_next_tick(
+    player: tuple, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    service, store, engine, _, clock = player
+    first, second = Track("first", "First"), Track("second", "Second")
+    service.dispatch("play", tracks=[first.to_dict(), second.to_dict()])
+    clock[0] = 12
+    original_stop = engine.stop
+
+    def disconnected() -> None:
+        monkeypatch.setattr(engine, "stop", original_stop)
+        raise PlaybackError("The mpv socket disconnected.")
+
+    monkeypatch.setattr(engine, "stop", disconnected)
+    payload = {"tracks": [Track("replacement", "Replacement").to_dict()]} if action == "play" else {}
+    result = service.dispatch(action, **payload)
+
+    assert store.stats()["listening_seconds"] == 12
+    if action == "stop":
+        assert result["track"] is None
+        assert store.queue() == [second]
+    else:
+        assert result["track"]["id"] == ("second" if action == "next" else "replacement")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix playback client")
+def test_socket_creation_errors_are_reported_as_playback_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def denied(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError("OS socket access denied")
+
+    monkeypatch.setattr(socket, "socket", denied)
+    client = PlayerClient(Config(tmp_path / "data", tmp_path / "runtime"))
+    with pytest.raises(PlaybackError, match="communicate"):
+        client.request("now")
+    with pytest.raises(PlaybackError, match="socket"):
+        client.ensure_running()
 
 
 def test_empty_radio_recommendations_exhaust_after_seed(player: tuple) -> None:
@@ -319,7 +483,10 @@ def test_background_service_survives_independent_clients(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix daemon and subprocess executable")
-def test_background_audio_controls_with_fake_mpv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("select_from_queue", [False, True])
+def test_background_audio_controls_with_fake_mpv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, select_from_queue: bool
+) -> None:
     """Use the actual daemon, engine, IPC and local provider across process boundaries."""
     import tempfile
 
@@ -373,15 +540,38 @@ server.close()
     track = Track(str(music_file), "Song", ("Artist",), provider="local")
     with tempfile.TemporaryDirectory(prefix="myne-audio-") as runtime:
         config = Config(tmp_path / "data", Path(runtime), mpv_binary=str(executable))
+        for key, value in config.to_env().items():
+            monkeypatch.setenv(key, value)
         monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1] / "src"))
         first = PlayerClient(config, timeout=5)
         first.ensure_running()
         try:
             assert first.request("play", tracks=[track.to_dict()])["track"]["title"] == "Song"
             second = PlayerClient(config, timeout=5)
+            tail: list[Track] = []
+            if select_from_queue:
+                queued = []
+                for title in ("Skipped", "Selected", "Last"):
+                    file = tmp_path / f"Artist - {title}.wav"
+                    file.write_bytes(b"RIFF")
+                    queued.append(Track(str(file), title, ("Artist",), provider="local"))
+                first.request("enqueue", tracks=[item.to_dict() for item in queued])
+                track = queued[1]
+                tail = queued[2:]
+                selected = second.request("play_queued", index=1, expected=track.to_dict())
+                assert selected["track"]["id"] == track.id
+                assert Store(config.database).queue() == tail
             assert second.request("pause", value=True)["paused"] is True
             assert second.request("seek", seconds=35)["position"] == 35
             assert second.request("volume", value=21)["volume"] == 21
+            from typer.testing import CliRunner
+
+            from myne.cli import app
+
+            assert CliRunner().invoke(app, ["mute"]).exit_code == 0
+            assert second.request("now")["muted"] is True
+            assert CliRunner().invoke(app, ["unmute"]).exit_code == 0
+            assert second.request("now")["muted"] is False
             assert second.request("resume")["paused"] is False
             assert second.request("now")["track"]["provider"] == "local"
         finally:
@@ -389,5 +579,5 @@ server.close()
             deadline = time.monotonic() + 5
             while config.socket_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.025)
-        assert Store(config.database).queue() == [track]
+        assert Store(config.database).queue() == [track, *tail]
         assert not config.mpv_socket_path.exists()

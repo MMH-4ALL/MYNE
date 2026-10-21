@@ -43,6 +43,18 @@ def test_get_song_maps_video_details(metadata: Mock) -> None:
     )
 
 
+def test_youtube_playlist_preserves_duplicate_entries_and_reports_limits(metadata: Mock) -> None:
+    metadata.get_playlist.return_value = {
+        "title": "Collection", "trackCount": 12,
+        "tracks": [song("first"), song("first"), song("private", isAvailable=False), song("last")],
+    }
+    playlist = YouTubeMusicProvider(client=metadata).get_playlist("PLsample", 3)
+    assert [t.id for t in playlist.tracks] == ["first", "first"]
+    assert "first 3" in playlist.warnings[0]
+    assert "omitted" in playlist.warnings[1]
+    metadata.get_playlist.assert_called_once_with("PLsample", limit=4)
+
+
 @pytest.mark.parametrize("duration", ["unknown", float("nan"), -1, None])
 def test_bad_optional_durations_are_not_fatal(metadata: Mock, duration: object) -> None:
     metadata.search.return_value = [song(duration_seconds=duration)]

@@ -1,7 +1,8 @@
 typer>=0.16,<1
 rich>=13.9,<15
 questionary>=2,<3
-textual>=3,<7
+textual>=6.12,<7
 ytmusicapi>=1.10,<2
 yt-dlp[default]>=2026.8.19
 platformdirs>=4,<5
+packaging>=24,<27

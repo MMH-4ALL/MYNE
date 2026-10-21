@@ -98,8 +98,9 @@ samples, retain peaks briefly, and clear on pause, buffering or stale data. Set
 transitions. `TEXTUAL_ANIMATIONS=none` and `TERM=dumb` also reduce motion;
 `NO_COLOR` controls color without changing animation preferences.
 
-After upgrading from Myne 0.1, restart the existing player with `myne shutdown`,
-then `myne play`. UI telemetry uses the updated local IPC protocol.
+After upgrading Myne, restart the existing player with `myne shutdown`, then
+`myne play`. The background service must reload the installed code for updated
+UI controls and playback fixes to take effect.
 
 ## Optional YouTube authentication
 
@@ -183,9 +184,11 @@ local provider. Change player settings before starting the service; run
 | `MYNE_RUNTIME_DIR` | Short, private Unix socket directory | Per-user temporary directory with data-path hash |
 | `MYNE_PROVIDER` | Default provider | `youtube` |
 | `MYNE_MPV` | mpv executable path/name | `mpv` |
+| `MYNE_AUDIO_OUTPUT` | Optional mpv output driver (`--ao`), such as `pulse` | mpv automatic selection |
 | `MYNE_VOLUME` | Initial volume, 0–100 | `70`; later changes persist |
 | `MYNE_AUTH_FILE` | ytmusicapi authentication JSON | unset |
 | `MYNE_COOKIES_FILE` | yt-dlp cookie file | unset |
+| `MYNE_SPOTIFY_TOKEN` | Optional Spotify user access token for authorized playlist imports; kept in the process environment, not saved in SQLite | unset; public embed metadata is used |
 | `MYNE_LIBRARY` | Local music library root | unset |
 | `MYNE_PLUGINS` | Comma-separated enabled entry-point names | none |
 | `MYNE_MIX_ENDPOINT` | Full AI chat endpoint | unset |
@@ -199,11 +202,42 @@ Unix socket path lengths are limited, so use a short runtime path. A custom
 
 ## Troubleshooting
 
+- Press **F2** for Settings, including the Updates tab. `myne update` only checks;
+  `myne update --install` installs a newer compatible version from official main
+  when MYNE is in a writable, non-editable virtual environment with pip. Daily
+  launch checks are opt-in and never install without pressing Install update.
+  Editable installs should use `git pull` and `python -m pip install -e .` in
+  their checkout; system-managed installs should use their original installer.
+  Keep MYNE open until installation finishes. After a successful update, close
+  the UI, run `myne shutdown`, then `myne ui`. Reinstall with the original method
+  if an installation fails. A newer development build will not downgrade to main.
+- For playlist imports, use **Ctrl+O** in the UI or `myne playlist import LINK`.
+  Spotify's public embed can expose only part of a playlist; MYNE labels it as
+  potentially partial. The optional token uses the current `/items` API with
+  pagination, but Spotify may restrict item access to your own/collaborative
+  playlists. Supply a valid user token with any necessary read scopes; no client
+  secret is needed by MYNE. Tokens can expire: refresh yours and retry if refused.
+  MYNE does not request Spotify audio or remove platform access restrictions.
+- Expand short Spotify/SoundCloud share links in their platform before copying
+  the full playlist address. Private, removed, regional, or unmatched songs may
+  be missing; open the playlist's **Info** panel for import notes.
 - `myne doctor` checks the interpreter, mpv executable, paths and plugin setup
   without contacting music services.
 - If mpv is missing, install it using your OS package manager or set `MYNE_MPV`.
-- If playback is silent, first try playing a local file directly with mpv. Check
-  OS audio routing and volume, then try the same file with Myne.
+- If playback is silent, run `myne volume 70`, then `myne resume`, and inspect
+  `myne --json now` while the UI remains open. The UI's − / + and Mute/Unmute
+  controls do the same sound adjustments. Raising the volume clears mute.
+- If `playing` is false or the timer stays at zero, check the reported error:
+  a selected song may still be loading or the stream may have failed. If the
+  timer advances, compare a local file played directly by mpv with the same
+  file in Myne, and check the host's volume and selected speakers/headphones.
+- An output of `null` intentionally sends audio nowhere. Remove a `null`
+  `MYNE_AUDIO_OUTPUT` setting or a silent-output wrapper in `MYNE_MPV`, then
+  restart the service. Meters measure decoded audio and cannot verify speakers.
+- If direct mpv playback only works with a particular output driver, set the
+  same driver using `MYNE_AUDIO_OUTPUT` before starting Myne. For example,
+  `MYNE_AUDIO_OUTPUT=pulse myne ui` selects PulseAudio when it is available.
+  Run `myne shutdown` first to apply a changed output to the background player.
 - If YouTube playback fails, upgrade the extractor with
   `python -m pip install --upgrade yt-dlp`, check its runtime requirements, and
   review whether cookies or account access are needed. Search and stream

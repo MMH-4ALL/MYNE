@@ -19,8 +19,8 @@ myne ui
 Linux and macOS are supported. Install **Python 3.12+** and **mpv**, then:
 
 ```sh
-git clone https://github.com/MMH-4ALL/myne-cli.git
-cd myne-cli
+git clone https://github.com/MMH-4ALL/MYNE.git
+cd MYNE
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
@@ -54,6 +54,10 @@ needs WSL with mpv and audio configured; native Windows IPC is not implemented.
   invent them.
 - A full-screen Textual TUI with search, keyboard selection, a queue pane,
   playback progress, transport controls, help, lyrics and statistics.
+- A toggleable playlist sidebar and shared-link imports from Spotify, YouTube
+  Music, YouTube, and SoundCloud, with persistent song collections and source links.
+- Saved settings for appearance and playback, plus optional daily update checks
+  and a manual update installer for supported virtual environments.
 - Local audio playback and library search, plus an explicit provider extension
   contract and opt-in Python entry-point plugins.
 
@@ -87,6 +91,8 @@ myne next
 myne seek 15
 myne seek -- -10
 myne volume 60
+myne mute                          # toggle sound mute
+myne unmute                        # keep the current volume, clear mute
 myne stop                           # retains upcoming tracks
 myne now
 myne lyrics
@@ -128,6 +134,128 @@ but cannot recover uncommitted listening seconds.
 
 ## TUI
 
+### Listening room
+
+Press **F3** or click **Listen** for a focused player with MYNE's vinyl graphic,
+song, artist, album and synchronized lyrics. Space pauses/resumes, `n` skips,
+and `f` likes the current song. **F3** brings back your library and selection;
+**Ctrl+F** returns directly to search. In compact terminals, `l` switches
+between the record and lyrics. This toggle leaves saved library preferences alone.
+The vinyl is a static MYNE graphic, not provider album artwork. Audio meters
+continue to display measured mpv levels, and all motion respects reduced motion.
+
+![MYNE listening room with a vinyl graphic, sample song metadata, synchronized lyrics and player controls](docs/listening.svg)
+
+*Actual Textual UI capture with sample metadata, original lyrics and sample
+audio measurements; no live playback was used for this preview.*
+
+### Settings and updates
+
+Open **Settings** from the masthead, press **F2**, or find Settings in **Ctrl+K**.
+The Appearance tab offers theme, sidebar, lyrics, visualizer and reduced motion.
+Playback stores a volume from 0 to 100; it also applies to a reachable running
+player without starting one. **Save settings** applies the form; Close/Esc
+discards unsaved edits. Older saved theme and volume values are preserved.
+
+The **Updates** tab has **Check now**, **Install update**, and **Check on launch**.
+Automatic checks are off by default. When enabled they check at launch, cache a
+successful result for a day, and back off for a day after a failure. Check now
+always retries immediately. Automatic checks do not install anything.
+
+Updates use the official `MMH-4ALL/MYNE` GitHub **main** branch. The installer
+rechecks the version, prepares a wheel from its fixed commit, checks the wheel's
+package/version metadata, then installs it using the current environment's pip.
+Only newer stable versions compatible with the current Python are offered.
+This development build correctly declines to replace itself with an older main
+branch version. Update checks need internet access; no account or API key is needed.
+
+The installer supports writable, non-editable virtual environments with pip,
+including normal pipx installations. Editable checkouts, system-managed installs,
+and environments without pip show their installation instructions instead.
+It does not use sudo, force a git reset, or bypass system package protections.
+Keep the update window open during installation. After success, close the UI,
+run `myne shutdown`, then `myne ui` to reload both processes. If installation
+fails, reinstall using the original install method; pip installs are not rollback transactions.
+
+```sh
+myne settings show
+myne settings set theme myne-ember
+myne settings set sidebar show
+myne settings set auto_check_updates true
+myne update                  # check only
+myne update --install        # explicitly install a newer compatible version
+myne --json update
+```
+
+![MYNE settings and update controls, shown with explicitly labelled sample update metadata](docs/settings.svg)
+
+*Actual UI capture with sample update status; no installation was performed for the preview.*
+
+### Music workspace
+
+Version 0.5 refreshes the Studio workspace with collection headings, total
+durations, source labels, numbered queue entries and a clearer player dock.
+The playlist sidebar is visible by default
+at widths of 100 columns or more. `Ctrl+B` or the Library button toggles it at
+any size; narrow terminals retain the view tabs. Studio, Midnight and Ember themes keep a single
+accent throughout the workspace; `t` switches themes and saves your choice.
+
+- **Discover, Liked, Recent and Playlists:** press `1`–`4` or use the visible
+  navigation. Favorites persist on this device. Recent tracks come from listening
+  segments recorded when a song ends, is skipped or is stopped.
+- **Command palette:** `Ctrl+K` opens searchable actions for the library, player,
+  themes, lyrics, statistics and queue snapshots.
+- **Queue tools:** move a selected queued track with `Alt+Up` / `Alt+Down`, remove
+  it with `Delete`, or shuffle upcoming tracks with `z`. The toolbar offers the
+  same actions and Save opens a named queue dialog. Saved queues appear alongside
+  imported playlists; Enter opens their tracks. Opening a collection leaves the
+  current song and queue alone. `myne queue restore` still replaces upcoming tracks.
+- **Player controls:** `,` / `.` seek ten seconds back/forward; `r` cycles repeat
+  off/all/one. Repeat persists across player restarts. Radio turns repeat off;
+  enabling repeat leaves radio mode. Manual Next bypasses repeat-one and moves
+  the skipped song to the end in repeat-all mode.
+
+### Playlist links
+
+Click **+ Import link** in the sidebar, press **Ctrl+O**, or paste a supported
+playlist link into the search box and press Enter. Give it an optional name,
+then choose **Import playlist**. Progress and Cancel stay available during matching.
+
+- **Spotify:** public `open.spotify.com/playlist/...` links and
+  `spotify:playlist:...` URIs. MYNE reads the public embed's exposed song metadata,
+  which may be a partial view; it always labels this limitation. An optional
+  `MYNE_SPOTIFY_TOKEN` uses Spotify's official playlist-items API and pagination
+  for playlists that the token is allowed to read. Current Spotify development
+  access generally requires ownership or collaborator access to read items.
+- **YouTube / YouTube Music:** playlist links containing `list=...`. Track IDs
+  are preserved directly, using the metadata API with an extractor fallback.
+- **SoundCloud:** public `soundcloud.com/artist/sets/playlist` links. The existing
+  extractor reads song metadata without downloading media files.
+
+Spotify and SoundCloud songs are matched to YouTube Music by title, artist,
+recording type, and duration when available. Weak matches are skipped rather
+than replaced with an unrelated song. These are YouTube versions, and MYNE does
+not stream Spotify audio. Matching depends on access to YouTube Music.
+
+Imported collections persist locally and appear by name in the sidebar. Open
+one to browse songs, use **▶ All** to start it or **+ All** to append it to the
+queue. **Info** shows the original source link, limits, and unmatched songs.
+Order and duplicates are preserved. Imports do not change playback or the
+upcoming queue, and an existing name receives a numbered suffix. Imports are
+one-time copies, not ongoing sync. Each import reads at most 500 entries; use
+`--limit` to choose a smaller CLI import. Removed/private/blocked songs can be
+omitted by the source. Expand short share links in the platform first and copy
+the full playlist address.
+
+```sh
+myne playlist import 'https://open.spotify.com/playlist/PLAYLIST_ID' --name 'Night drive'
+myne playlist import 'https://music.youtube.com/playlist?list=PLAYLIST_ID' --limit 100
+myne playlist list
+myne playlist show 'Night drive'
+myne playlist queue 'Night drive'
+myne playlist play 'Night drive'
+```
+
 `myne ui` opens the interface. Search, then select a result and press Enter to
 play or `a` to queue it. The on-screen footer lists transport/help shortcuts.
 The search field also accepts `/mix focus`, `/mix-ai night drive`, and
@@ -136,6 +264,16 @@ Wide terminals show a lyrics side panel automatically; compact terminals switch
 between tracks and lyrics. Timed lines follow playback, pause and seeking. Plain
 lyrics remain scrollable and show their source. Closing the TUI leaves the player
 running. Network and database work runs outside the UI event loop.
+
+Playing a selected queue entry skips the entries before it and continues through
+the existing tail once. If another client changes the selected entry first, Myne
+asks you to refresh and select it again. Space or the Start control begins the
+saved queue when nothing is playing, then pauses/resumes active playback.
+The sound row shows volume, mute and the current audio output. Click − / + or
+press `[` / `]` to adjust volume; click Mute/Unmute or press `m` to toggle sound.
+Raising the volume also unmutes. Loading tracks are labelled until playback
+starts, and a `null` output is explicitly marked silent. `myne --json now`
+includes the mute state, output driver and configured audio-device selector.
 
 Meters render smoothly at 30 FPS with eased attack/release, peak hold, and
 fractional block edges. Audio is polled separately at a bounded rate, so smoother
@@ -151,7 +289,7 @@ mpv builds without the FFmpeg `astats` filter can continue playing with the mete
 disabled. After upgrading an already-running service, run `myne shutdown` once
 and start playback again to load the new feature protocol.
 
-![Myne CLI TUI showing sample music metadata, search results, queue and playback controls](docs/tui.svg)
+![Myne playlist sidebar showing sample collections, imported tracks, queue, lyrics and playback controls](docs/tui.svg)
 
 *Actual interface captured with sample fixture metadata; no live playback or listening history is shown.*
 
@@ -230,7 +368,7 @@ YouTube song.
 
 ## Roadmap
 
-Spotify metadata import, Discord Rich Presence, album collection management,
+Discord Rich Presence, album collection management,
 scrobbling, a frequency-spectrum visualizer, multi-device sync, and additional providers are
 future work. They are not represented as finished integrations. The provider
 and mix plugin contracts give extensions a stable place to start.
@@ -241,3 +379,4 @@ Upstream references: [ytmusicapi](https://ytmusicapi.readthedocs.io/en/stable/),
 [LRCLIB API](https://lrclib.net/docs),
 [FFmpeg audio statistics](https://ffmpeg.org/ffmpeg-filters.html#astats),
 [Textual](https://textual.textualize.io/).
+Spotify import behavior follows its [current playlist API changes](https://developer.spotify.com/documentation/web-api/references/changes/february-2026).

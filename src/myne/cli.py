@@ -24,11 +24,16 @@ from myne.config import Config
 from myne.errors import MyneError
 from myne.models import Track
 from myne.motion import AudioMotion, reduced_motion_requested
+from myne.preferences import CHOICES, Preferences
 from myne.service import Application
 
 app = typer.Typer(name="myne", help="My Music. My Queue. My Experience. Myne CLI.", no_args_is_help=True)
 queue_app = typer.Typer(help="Manage your persistent upcoming queue.", no_args_is_help=True)
 app.add_typer(queue_app, name="queue")
+playlist_app = typer.Typer(help="Import and browse playlists from shared links.", no_args_is_help=True)
+app.add_typer(playlist_app, name="playlist")
+settings_app = typer.Typer(help="View or change saved settings.", no_args_is_help=True)
+app.add_typer(settings_app, name="settings")
 console = Console(highlight=False)
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -246,6 +251,52 @@ def queue_remove(ctx: typer.Context, position: int = typer.Argument(..., min=1))
     emit(ctx, track.to_dict(), f"Removed · {track.title}")
 
 
+@playlist_app.command("import")
+@handled
+def playlist_import(
+    ctx: typer.Context, link: str,
+    name: str | None = typer.Option(None, help="Name the saved playlist."),
+    limit: int = typer.Option(500, min=1, max=500),
+) -> None:
+    """Import a Spotify, YouTube Music, YouTube or SoundCloud playlist link."""
+    result = application(ctx).import_playlist(link, name, limit=limit)
+    emit(ctx, asdict(result), f"Imported {len(result.playlist.tracks)} tracks as {result.playlist.name}.")
+    if not ctx.obj.get("json"):
+        for warning in result.playlist.warnings:
+            console.print(Text(warning, style="yellow"))
+        for skipped in result.skipped:
+            console.print(Text(f"Unmatched · {skipped}", style="dim"))
+
+
+@playlist_app.command("list")
+@handled
+def playlist_list(ctx: typer.Context) -> None:
+    rows = application(ctx).playlists()
+    emit(ctx, [{"name": name, "tracks": count} for name, count in rows],
+         "\n".join(f"{name} · {count} tracks" for name, count in rows) or "No playlists. Import a playlist link to start.")
+
+
+@playlist_app.command("show")
+@handled
+def playlist_show(ctx: typer.Context, name: str) -> None:
+    playlist = application(ctx).playlist(name)
+    tracks_table(ctx, list(playlist.tracks), playlist.name)
+
+
+@playlist_app.command("play")
+@handled
+def playlist_play(ctx: typer.Context, name: str) -> None:
+    service = application(ctx)
+    emit(ctx, service.play(list(service.playlist(name).tracks)), f"Playing playlist · {name}")
+
+
+@playlist_app.command("queue")
+@handled
+def playlist_queue(ctx: typer.Context, name: str) -> None:
+    service = application(ctx)
+    emit(ctx, service.enqueue(list(service.playlist(name).tracks)), f"Playlist added to queue · {name}")
+
+
 @app.command()
 @handled
 def now(ctx: typer.Context) -> None:
@@ -254,12 +305,17 @@ def now(ctx: typer.Context) -> None:
     track = status.get("track")
     label = (
         (
-            f"{'Paused' if status.get('paused') else 'Playing'} · {track['title']}\n"
+            f"{'Paused' if status.get('paused') else 'Playing' if status.get('playing') else 'Loading'} · {track['title']}\n"
             f"{duration(status.get('position'))} / {duration(status.get('duration'))} · Volume {status.get('volume', 70):g}%"
         )
         if track
         else "Nothing is playing."
     )
+    if status.get("muted"):
+        label += "\nSound is muted. Run myne unmute or raise the volume."
+    if status.get("audio_output"):
+        output = str(status["audio_output"])
+        label += f"\nAudio output: {output}" + (" (silent)" if output == "null" else "")
     if status.get("error"):
         label += f"\n{status['error']}"
     emit(ctx, status, label)
@@ -511,6 +567,21 @@ def volume(ctx: typer.Context, value: int = typer.Argument(..., min=0, max=100))
 
 @app.command()
 @handled
+def mute(ctx: typer.Context) -> None:
+    """Toggle sound mute without pausing the song."""
+    result = application(ctx).control("mute")
+    emit(ctx, result, "Sound muted." if result.get("muted") else "Sound unmuted.")
+
+
+@app.command()
+@handled
+def unmute(ctx: typer.Context) -> None:
+    """Unmute the shared player. A zero volume still needs to be raised."""
+    emit(ctx, application(ctx).control("mute", value=False), "Sound unmuted.")
+
+
+@app.command()
+@handled
 def shutdown(ctx: typer.Context) -> None:
     """Stop the background service, preserving its interrupted song for recovery."""
     application(ctx).player.shutdown()
@@ -524,6 +595,45 @@ def ui(ctx: typer.Context) -> None:
     from myne.tui import launch_ui
 
     launch_ui(application(ctx))
+
+
+@settings_app.command("show")
+@handled
+def settings_show(ctx: typer.Context) -> None:
+    values = application(ctx).preferences().to_dict()
+    emit(ctx, values, "\n".join(f"{key}: {value}" for key, value in values.items()))
+
+
+@settings_app.command("set")
+@handled
+def settings_set(ctx: typer.Context, key: str, value: str) -> None:
+    service = application(ctx)
+    values = service.preferences().to_dict()
+    if key not in values:
+        raise MyneError("Unknown setting. Run myne settings show for supported names.")
+    if key in CHOICES:
+        parsed: Any = value
+    elif key == "volume":
+        if not value.isascii() or not value.isdigit():
+            raise MyneError("Volume must be an integer from 0 to 100.")
+        parsed = int(value)
+    elif value.lower() in {"true", "on", "yes", "1", "false", "off", "no", "0"}:
+        parsed = value.lower() in {"true", "on", "yes", "1"}
+    else:
+        raise MyneError("Use true or false for this setting.")
+    values[key] = parsed
+    preferences = Preferences.from_dict(values, strict=True)
+    saved = service.save_preferences(preferences.to_dict())
+    emit(ctx, saved.to_dict(), f"Saved {key} · {value}")
+
+
+@app.command("update")
+@handled
+def update_command(ctx: typer.Context, install: bool = typer.Option(False, "--install", help="Install a newer official version in a supported environment.")) -> None:
+    """Check for an update; add --install to prepare, verify, and install it."""
+    service = application(ctx)
+    info = service.install_update() if install else service.check_update(True)
+    emit(ctx, asdict(info), f"{info.message}\n{info.install_note}")
 
 
 @app.command()

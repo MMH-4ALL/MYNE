@@ -63,6 +63,23 @@ def test_missing_mpv_is_actionable(tmp_path: Path) -> None:
         engine.start()
 
 
+@pytest.mark.parametrize("data", [[], None, "unexpected", 7])
+def test_player_client_rejects_invalid_command_data_without_crashing(tmp_path, monkeypatch, data):
+    from myne.config import Config
+    from myne.playback.client import PlayerClient
+
+    class Connection:
+        def settimeout(self, _timeout): pass
+        def connect(self, _path): pass
+        def sendall(self, _payload): pass
+        def recv(self, _size):
+            return json.dumps({"ok": True, "data": data}).encode() + b"\n"
+        def close(self): pass
+    monkeypatch.setattr("myne.playback.client.socket.socket", lambda *_: Connection())
+    with pytest.raises(PlaybackError, match="invalid command data"):
+        PlayerClient(Config(tmp_path, tmp_path)).request("now")
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Unix permissions")
 def test_private_runtime_rejects_symlink(tmp_path: Path) -> None:
     real = tmp_path / "real"
@@ -85,6 +102,19 @@ def test_play_replaces_http_headers_between_providers(
     assert calls[0] == ("set_property", "http-header-fields", ["Authorization: secret"])
     assert calls[4] == ("set_property", "http-header-fields", [])
     assert calls[-2] == ("loadfile", "file:///music/song.flac", "replace")
+
+
+def test_snapshot_exposes_mute_and_the_actual_output_driver(tmp_path: Path, monkeypatch) -> None:
+    engine = MpvEngine(tmp_path / "mpv.sock")
+    properties = {"time-pos": 12, "duration": 200, "pause": False, "core-idle": False,
+                  "volume": 70, "mute": True, "current-ao": "null", "audio-device": "auto"}
+    monkeypatch.setattr(engine, "command", lambda _command, name, **_kwargs: properties.get(name))
+    with socket.socket() as connection:
+        monkeypatch.setattr(engine, "_socket", connection)
+        state = engine.snapshot()
+    assert state["muted"] is True
+    assert state["audio_output"] == "null"
+    assert state["audio_device"] == "auto"
 
 
 def test_old_playlist_end_event_cannot_finish_new_track(tmp_path: Path) -> None:

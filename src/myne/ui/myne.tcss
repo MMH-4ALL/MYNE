@@ -1,0 +1,134 @@
+Screen { background: $background; color: $foreground; }
+VerticalScroll, DataTable, #sidebar, OptionList {
+    scrollbar-size: 1 1; scrollbar-color: $panel; scrollbar-color-hover: $primary;
+    scrollbar-background: $background; scrollbar-corner-color: $background;
+}
+#masthead { height: 2; padding: 0 1; background: $surface; }
+#brand { width: 1fr; height: 2; color: $primary; text-style: bold; }
+#header-right { width: 50; height: 2; }
+#session-state { height: 1; color: $text-muted; text-align: right; }
+#header-buttons { height: 1; align-horizontal: right; }
+#header-buttons Button {
+    width: 10; min-width: 8; height: 1; min-height: 1; border: none; padding: 0 1;
+    color: $foreground; background: $surface;
+}
+#workspace { height: 1fr; min-height: 9; }
+#sidebar {
+    width: 24; padding: 1; background: $surface; border-right: solid $panel;
+    overflow-y: auto;
+}
+#sidebar .sidebar-label { height: 2; color: $text-muted; text-style: bold; }
+#sidebar .view-button, #sidebar .mood-button {
+    width: 100%; height: 2; min-height: 1; border: none; padding: 0 1;
+    content-align: left middle; background: $surface; color: $foreground;
+}
+#sidebar .mood-button { height: 1; }
+#sidebar .selected { color: $primary; background: $primary 12%; text-style: bold; border-left: thick $primary; }
+#sidebar-playlists { height: auto; min-height: 2; max-height: 10; border: none; padding: 0; background: $surface; }
+#sidebar-playlists > .option-list--option-highlighted { color: $primary; background: $primary 12%; }
+#playlist-tools { display: none; height: 1; background: $surface; }
+#playlist-tools Button {
+    height: 1; min-height: 1; min-width: 1; width: 1fr; border: none; padding: 0;
+    background: $surface; color: $primary;
+}
+#library-count { height: 4; margin-top: 1; color: $text-muted; }
+#rail-tip { height: auto; margin-top: 1; color: $text-muted; }
+#main { width: 1fr; }
+#search { margin: 0 1; height: 3; border: tall $panel; background: $surface; }
+#search:focus { border: tall $primary; }
+#collection-header { height: 3; margin: 0 1; padding: 0 1; background: $surface; }
+#collection-mark { width: 5; height: 3; content-align: center middle; color: $primary; background: $primary 10%; text-style: bold; }
+#collection-copy { width: 1fr; height: 3; padding: 0 2; }
+#collection-title { height: 1; color: $foreground; text-style: bold; text-overflow: ellipsis; }
+#collection-meta { height: 1; color: $text-muted; text-overflow: ellipsis; }
+#view-tabs { height: 1; margin: 0 1; }
+#view-tabs Button {
+    width: 1fr; min-width: 10; height: 1; min-height: 1; border: none; padding: 0 1;
+    background: $surface; color: $text-muted;
+}
+#view-tabs .selected { background: $primary; color: $background; text-style: bold; }
+#status { height: 1; margin: 0 2; color: $text-muted; text-overflow: ellipsis; }
+#status.error { color: $error; }
+#library { height: 1fr; min-height: 4; margin: 0 1; }
+.pane { border: round $panel; padding: 0; border-title-color: $primary; border-subtitle-color: $text-muted; }
+.pane:focus-within { border: round $primary 55%; }
+#results-pane { width: 2fr; min-width: 32; margin-right: 1; }
+#queue-pane { width: 1fr; min-width: 23; }
+#lyrics-pane { width: 2fr; min-width: 29; margin-left: 1; }
+#lyrics-scroll { height: 1fr; padding: 1 2; }
+#lyrics-body { height: auto; min-height: 1; }
+#lyrics-source { height: 1; color: $text-muted; padding: 0 1; text-overflow: ellipsis; }
+#library.compact-lyrics #results-pane, #library.compact-lyrics #queue-pane { display: none; }
+#library.compact-lyrics #lyrics-pane { width: 1fr; margin-left: 0; }
+DataTable { height: 1fr; background: $background; }
+DataTable > .datatable--header { background: $surface; color: $text-muted; }
+DataTable > .datatable--row-label { color: $text-muted; background: $background; }
+DataTable > .datatable--header-cursor { color: $foreground; background: $panel; }
+DataTable:focus > .datatable--header-cursor { color: $background; background: $primary; }
+DataTable > .datatable--odd-row { background: $surface 40%; }
+DataTable:focus > .datatable--cursor { background: $primary; color: $background; text-style: bold; }
+DataTable > .datatable--cursor { background: $panel; }
+.empty { height: auto; min-height: 1; max-height: 3; color: $text-muted; padding: 0 1; }
+#queue-tools { height: 1; align-horizontal: center; }
+#queue-tools Button {
+    height: 1; min-height: 1; min-width: 1; border: none; padding: 0; margin-right: 1;
+    background: $surface; color: $text-muted;
+}
+#queue-up, #queue-down { width: 1; }
+#queue-remove { width: 3; }
+#queue-shuffle { width: 7; }
+#queue-save { width: 4; margin-right: 0; }
+#player { height: 11; margin: 0 1; border: round $panel; border-title-color: $primary; padding: 0 1; background: $surface; }
+#player.no-visualizer { height: 8; }
+#sound-controls { height: 1; }
+#sound-controls Button {
+    min-width: 3; width: 3; height: 1; min-height: 1; border: none; padding: 0;
+    background: $surface;
+}
+#sound-controls #mute { width: 8; margin: 0 1; }
+#sound-controls #repeat { width: 10; margin-right: 1; }
+#sound-controls #seek-back, #sound-controls #seek-forward { width: 6; }
+#volume-label { width: 14; height: 1; text-align: center; }
+#audio-output { width: 1fr; height: 1; color: $text-muted; text-overflow: ellipsis; }
+#audio-output.silent { color: $warning; }
+#audio-meter { height: 3; color: $text-muted; }
+#now { height: 1; text-style: bold; text-overflow: ellipsis; }
+#progress-row { height: 1; }
+#progress { width: 1fr; height: 1; padding: 0 1 0 0; }
+#time { width: 19; height: 1; text-align: right; color: $text-muted; }
+#transport { height: 3; align-horizontal: center; }
+#transport Button { min-width: 7; width: 1fr; height: 3; margin: 0 1 0 0; border: none; background: $panel; }
+#transport #play { color: $primary; text-style: bold; }
+#transport #pause { background: $primary; color: $background; text-style: bold; }
+#transport #favorite { color: $primary; }
+Footer { background: $surface; }
+Screen.compact #player { height: 10; }
+Screen.compact #player.no-visualizer { height: 8; }
+Screen.compact #audio-meter { height: 2; }
+Screen.compact #sidebar { padding: 0 1; }
+Screen.compact #sidebar .sidebar-label { height: 1; }
+Screen.compact #sidebar .sidebar-label { margin-top: 0; }
+Screen.compact #sidebar .view-button, Screen.compact #sidebar .mood-button { height: 1; }
+Screen.compact #mood-label, Screen.compact #mood-focus, Screen.compact #mood-night,
+Screen.compact #library-count, Screen.compact #rail-tip { display: none; }
+Button:focus { text-style: bold reverse; }
+Button:hover { color: $primary; }
+#transport #pause:hover { color: $background; background: $primary-lighten-1; }
+#listening-stage { display: none; width: 3fr; padding: 1 2; background: $surface; }
+#listening-label { height: 1; color: $primary; text-style: bold; text-align: center; }
+#listening-title { height: 2; content-align: center middle; text-style: bold; text-overflow: ellipsis; }
+#listening-artist { height: 1; text-align: center; color: $foreground; text-overflow: ellipsis; }
+#listening-album { height: 2; text-align: center; color: $text-muted; text-overflow: ellipsis; }
+#listening-hint { height: 1; text-align: center; color: $text-muted; text-overflow: ellipsis; }
+Screen.listening #lyrics-pane { width: 2fr; }
+Screen.listening #play, Screen.listening #add { display: none; }
+Screen.listening #lyrics-scroll { padding: 2 3; }
+Screen.compact #listening-stage { padding: 0 1; }
+Screen.compact #record-art { min-height: 3; }
+Screen.compact #listening-title { height: 1; }
+Screen.compact #listening-album { height: 1; }
+Screen.compact #listening-hint { display: none; }
+Screen.compact #lyrics-scroll { padding: 0 1; }
+Screen.compact.listening #lyrics-scroll { padding: 1 2; }
+DetailScreen { align: center middle; background: $background 85%; }
+DetailScreen > Vertical { background: $surface; border: solid $primary; }

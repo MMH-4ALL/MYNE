@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from threading import Event
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -10,11 +11,14 @@ from myne.container import create_registry
 from myne.errors import MyneError, PlaybackError, ProviderError
 from myne.lyrics import LyricsDocument, LyricsService
 from myne.mix import AIMixStrategy, MixService
-from myne.models import Album, Artist, Track
+from myne.models import Album, Artist, Playlist, Track
 from myne.playback.client import PlayerClient
+from myne.playlists import ImportResult, PlaylistImporter, Progress
 from myne.plugins import PluginRegistry
+from myne.preferences import Preferences
 from myne.providers.base import MusicProvider
 from myne.storage import Store
+from myne.updates import UpdateInfo, UpdateManager
 
 
 class Application:
@@ -25,6 +29,8 @@ class Application:
         registry: PluginRegistry | None = None,
         player: PlayerClient | None = None,
         lyrics_service: LyricsService | None = None,
+        playlist_importer: PlaylistImporter | None = None,
+        updater: UpdateManager | None = None,
     ) -> None:
         self.config = config
         self.store = store or Store(config.database)
@@ -32,6 +38,8 @@ class Application:
         self.player = player or PlayerClient(config)
         self._live_player = player or PlayerClient(config, timeout=2.0)
         self._lyrics = lyrics_service or LyricsService(self.registry.provider, config.data_dir)
+        self._playlist_importer = playlist_importer
+        self._updater = updater
 
     @property
     def provider(self) -> MusicProvider:
@@ -89,26 +97,129 @@ class Application:
         self.store.enqueue(tracks)
         return {"added": len(tracks)}
 
+    def play_queued(self, index: int, expected: Track) -> dict[str, Any]:
+        self.player.ensure_running()
+        return self.player.request("play_queued", index=index, expected=expected.to_dict())
+
     def queue(self) -> list[Track]:
         return self.store.queue()
+
+    def queue_remove(self, index: int, expected: Track) -> dict[str, Any]:
+        self.store.remove(index, expected)
+        return {"removed": 1}
+
+    def queue_move(self, index: int, step: int, expected: Track) -> dict[str, Any]:
+        return {"queue_index": self.store.move(index, step, expected)}
+
+    def queue_shuffle(self) -> dict[str, Any]:
+        return {"shuffled": self.store.shuffle_queue()}
+
+    def favorites(self) -> list[Track]:
+        return self.store.favorites()
+
+    def recent_tracks(self) -> list[Track]:
+        return self.store.recent_tracks()
+
+    def toggle_favorite(self, track: Track) -> bool:
+        return self.store.toggle_favorite(track)
+
+    def playlists(self) -> list[tuple[str, int]]:
+        return self.store.playlists()
+
+    def playlist(self, name: str) -> Playlist:
+        return self.store.playlist(name)
+
+    def import_playlist(self, link: str, name: str | None = None, *, limit: int = 500,
+                        progress: Progress | None = None, cancel: Event | None = None) -> ImportResult:
+        if name is not None and (not name.strip() or len(name.strip()) > 80):
+            raise MyneError("Give the playlist a name between 1 and 80 characters.")
+        importer = self._playlist_importer or PlaylistImporter(
+            self.registry.provider("youtube"), cookies_file=self.config.cookies_file
+        )
+        result = importer.read(link, limit=limit, progress=progress, cancel=cancel)
+        if cancel is not None and cancel.is_set():
+            raise MyneError("Playlist import cancelled. Nothing was saved.")
+        from dataclasses import replace
+        playlist = replace(result.playlist, name=name.strip()) if name is not None else result.playlist
+        return replace(result, playlist=self.store.import_playlist(playlist))
+
+    def save_playlist(self, name: str) -> int:
+        if not name.strip() or len(name) > 80:
+            raise MyneError("Give the saved queue a name between 1 and 80 characters.")
+        return self.store.save_queue(name.strip())
+
+    def restore_playlist(self, name: str) -> dict[str, Any]:
+        return {"restored": self.store.restore_queue(name)}
+
+    def ui_theme(self) -> str:
+        value = self.store.get_setting("ui_theme", "myne-studio")
+        return value if isinstance(value, str) else "myne-studio"
+
+    def save_ui_theme(self, name: str) -> None:
+        Preferences.from_dict({"theme": name}, strict=True)
+        self.store.set_setting("ui_theme", name)
+
+    def preferences(self) -> Preferences:
+        values = Preferences(volume=self.config.volume).to_dict()
+        saved = self.store.get_setting("preferences", {})
+        if isinstance(saved, dict):
+            values.update({key: value for key, value in saved.items() if key in values})
+        values["theme"] = self.store.get_setting("ui_theme", values["theme"])
+        values["volume"] = self.store.get_setting("volume", values["volume"])
+        return Preferences.from_dict(values)
+
+    def save_preferences(self, values: dict[str, Any]) -> Preferences:
+        preferences = Preferences.from_dict(values, strict=True)
+        self.store.set_settings({"preferences": preferences.to_dict(), "ui_theme": preferences.theme,
+                                 "volume": preferences.volume})
+        # Saving settings must never start mpv. A reachable running player can
+        # use the new volume immediately; otherwise the next start reads it.
+        if self.config.socket_path.exists():
+            try:
+                self._live_player.request("volume", value=preferences.volume)
+            except PlaybackError:
+                pass
+        return preferences
+
+    @property
+    def updates(self) -> UpdateManager:
+        if self._updater is None:
+            self._updater = UpdateManager(self.store)
+        return self._updater
+
+    def update_status(self) -> UpdateInfo:
+        return self.updates.status()
+
+    def check_update(self, force: bool = True) -> UpdateInfo:
+        return self.updates.check(force=force)
+
+    def install_update(self, progress: Any = None) -> UpdateInfo:
+        return self.updates.install(progress)
 
     def now(self) -> dict[str, Any]:
         try:
             return self._live_player.request("now")
         except PlaybackError as exc:
+            volume = self.store.get_setting("volume", self.config.volume)
+            if type(volume) is not int or not 0 <= volume <= 100:
+                volume = self.config.volume
             return {
                 "track": None,
                 "paused": False,
                 "playing": False,
                 "position": 0.0,
                 "duration": None,
-                "volume": self.config.volume,
+                "volume": volume,
+                "muted": False,
+                "audio_output": None,
+                "audio_device": None,
                 "radio": False,
+                "repeat": self.store.get_setting("repeat", "off"),
                 "error": str(exc) if self.config.socket_path.exists() else None,
             }
 
     def control(self, action: str, **payload: Any) -> dict[str, Any]:
-        if action == "resume":
+        if action in {"resume", "volume", "mute", "repeat"}:
             self.player.ensure_running()
         return self.player.request(action, **payload)
 

@@ -4,15 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "myne-cli"
-version = "0.2.1"
+version = "0.5.0"
 description = "My Music. My Queue. My Experience. A terminal-first streaming music player."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
   "typer>=0.16,<1", "rich>=13.9,<15", "questionary>=2,<3",
-  "textual>=3,<7", "ytmusicapi>=1.10,<2", "yt-dlp[default]>=2026.8.19",
+  "textual>=6.12,<7", "ytmusicapi>=1.10,<2", "yt-dlp[default]>=2026.8.19",
   "platformdirs>=4,<5",
+  "packaging>=24,<27",
 ]
 
 [project.optional-dependencies]

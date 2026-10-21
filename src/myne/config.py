@@ -22,6 +22,7 @@ class Config:
     enabled_plugins: tuple[str, ...] = ()
     volume: int = 70
     library_path: str | None = None
+    audio_output: str | None = None
 
     @property
     def database(self) -> Path:
@@ -65,6 +66,7 @@ class Config:
             tuple(p.strip() for p in os.environ.get("MYNE_PLUGINS", "").split(",") if p.strip()),
             volume,
             os.environ.get("MYNE_LIBRARY") or None,
+            os.environ.get("MYNE_AUDIO_OUTPUT") or None,
         )
         config.prepare()
         return config
@@ -91,4 +93,5 @@ class Config:
             "MYNE_PLUGINS": ",".join(self.enabled_plugins),
             "MYNE_VOLUME": str(self.volume),
             "MYNE_LIBRARY": self.library_path or "",
+            "MYNE_AUDIO_OUTPUT": self.audio_output or "",
         }

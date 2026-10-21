@@ -49,7 +49,12 @@ class PlayerService:
         self._volume = (
             saved_volume if isinstance(saved_volume, int) and 0 <= saved_volume <= 100 else config.volume
         )
-        self.engine = engine or MpvEngine(config.mpv_socket_path, config.mpv_binary, self._volume)
+        self._muted = False
+        saved_repeat = self.store.get_setting("repeat", "off")
+        self._repeat = saved_repeat if saved_repeat in ("off", "all", "one") else "off"
+        self.engine = engine or MpvEngine(
+            config.mpv_socket_path, config.mpv_binary, self._volume, audio_output=config.audio_output
+        )
         self.clock = clock
         self.lock = threading.RLock()
         self.shutdown_requested = False
@@ -80,7 +85,13 @@ class PlayerService:
     def _finish(self, completed: bool, stop_engine: bool = True) -> None:
         self._account()
         if stop_engine:
-            self.engine.stop()
+            try:
+                self.engine.stop()
+            except (MyneError, OSError):
+                # A disconnect can happen before tick notices it. Retire that
+                # engine so stop/next/play can still finish the durable track.
+                with suppress(MyneError, OSError):
+                    self.engine.close()
         if self._active is not None:
             self.store.finish_current(self._listened, completed)
         self._active = None
@@ -189,6 +200,11 @@ class PlayerService:
                     else:
                         self._failures = 0
                     self._finish(ended.get("reason") == "eof", stop_engine=False)
+                    if ended.get("reason") == "eof" and ended_track is not None and self._radio_seed is None:
+                        if self._repeat == "one":
+                            self.store.enqueue([ended_track], front=True)
+                        elif self._repeat == "all":
+                            self.store.enqueue([ended_track])
                     if self._failures >= 3:
                         self._auto = False
                         if ended_track is not None:
@@ -223,12 +239,16 @@ class PlayerService:
             "paused": False,
             "playing": False,
             "volume": self._volume,
+            "muted": self._muted,
+            "audio_output": None,
+            "audio_device": None,
         }
         if self._active is not None:
             state.update(self.engine.snapshot())
         state.update(
             track=self._active.to_dict() if self._active else None,
             radio=self._radio_seed is not None,
+            repeat=self._repeat,
             error=self._error,
         )
         return state
@@ -269,7 +289,6 @@ class PlayerService:
                     if not isinstance(enabled, bool):
                         raise PlaybackError("Visualizer enabled must be true or false.")
                     self.engine.enable_visualizer(enabled)
-                state = self.now()
                 try:
                     levels = (
                         self.engine.audio_levels()
@@ -283,6 +302,12 @@ class PlayerService:
                         "peak": [],
                         "error": "Audio measurements are temporarily unavailable.",
                     }
+                # mpv can leave buffering or stop while measurements are read.
+                # Pair them with the later transport state, and never emit
+                # active measurements alongside a paused/idle status packet.
+                state = self.now()
+                if not state.get("playing") or state.get("paused"):
+                    levels = {**levels, "available": False, "rms": [], "peak": []}
                 return {
                     **levels,
                     "track_id": self._active.id if self._active else None,
@@ -291,6 +316,23 @@ class PlayerService:
                     "playing": state.get("playing", False),
                     "position": state.get("position", 0.0),
                 }
+            if action == "play_queued":
+                index = payload.get("index")
+                if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                    raise PlaybackError("Queue index must be a non-negative integer.")
+                expected = self._tracks([payload.get("expected")])[0]
+                try:
+                    self.store.skip_to(index, expected)
+                except MyneError as exc:
+                    raise PlaybackError(str(exc)) from exc
+                self._radio_seed = None
+                self._finish(False)
+                self._error = None
+                self._failures = 0
+                self._auto = True
+                self._advance()
+                self._check_started()
+                return self.now()
             if action in {"play", "enqueue"}:
                 tracks = self._tracks(payload.get("tracks"))
                 if not tracks:
@@ -330,7 +372,10 @@ class PlayerService:
                 self._counting = not value and bool(self.engine.snapshot()["playing"])
                 return self.now()
             if action == "next":
+                skipped = self._active
                 self._finish(False)
+                if skipped is not None and self._repeat == "all" and self._radio_seed is None:
+                    self.store.enqueue([skipped])
                 self._error = None
                 self._failures = 0
                 self._auto = True
@@ -343,16 +388,41 @@ class PlayerService:
                 self._auto = False
                 return self.now()
             if action == "volume":
-                value = self._number(payload.get("value"), "Volume")
+                if "value" in payload and "delta" in payload:
+                    raise PlaybackError("Provide a volume value or a relative change, not both.")
+                if "delta" in payload:
+                    value = max(0.0, min(100.0, self._volume + self._number(payload["delta"], "Volume change")))
+                else:
+                    value = self._number(payload.get("value"), "Volume")
                 if not 0 <= value <= 100:
                     raise PlaybackError("Volume must be between 0 and 100.")
                 self.engine.start()
                 self.engine.set_volume(round(value))
                 self._volume = round(value)
+                if self._volume > 0:
+                    self._muted = False
                 self.store.set_setting("volume", round(value))
                 result = self.now()
                 result["volume"] = round(value)
                 return result
+            if action == "mute":
+                value = payload.get("value", not self._muted)
+                if not isinstance(value, bool):
+                    raise PlaybackError("Mute value must be true or false.")
+                self.engine.start()
+                self.engine.set_mute(value)
+                self._muted = value
+                return self.now()
+            if action == "repeat":
+                modes = ("off", "all", "one")
+                value = payload.get("value", modes[(modes.index(self._repeat) + 1) % len(modes)])
+                if value not in modes:
+                    raise PlaybackError("Repeat mode must be off, all, or one.")
+                self._repeat = value
+                if value != "off":
+                    self._radio_seed = None
+                self.store.set_setting("repeat", value)
+                return self.now()
             if action == "seek":
                 if self._active is None:
                     raise PlaybackError("Nothing is playing.")
@@ -363,6 +433,8 @@ class PlayerService:
                 seed = seeds[0]
                 self._finish(False)
                 self._radio_seed = seed
+                self._repeat = "off"
+                self.store.set_setting("repeat", "off")
                 self._radio_last_seed = None
                 self._error = None
                 self._failures = 0

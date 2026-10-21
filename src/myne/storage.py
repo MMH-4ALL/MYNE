@@ -2,6 +2,7 @@
 
 import json
 import math
+import random
 import sqlite3
 from collections import Counter
 from contextlib import contextmanager
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from myne.errors import MyneError
-from myne.models import Track
+from myne.models import Playlist, Track
 
 
 class Store:
@@ -24,6 +25,13 @@ class Store:
                 CREATE TABLE IF NOT EXISTS queue (position INTEGER PRIMARY KEY, track TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS snapshots (name TEXT PRIMARY KEY, tracks TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS playlist_sources (
+                    name TEXT PRIMARY KEY, metadata TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS favorites (
+                    provider TEXT NOT NULL, id TEXT NOT NULL, track TEXT NOT NULL,
+                    PRIMARY KEY(provider,id)
+                );
                 CREATE TABLE IF NOT EXISTS history (
                     id INTEGER PRIMARY KEY, track TEXT NOT NULL, seconds REAL NOT NULL,
                     completed INTEGER NOT NULL, played_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -121,15 +129,58 @@ class Store:
         with self._connect(True) as db:
             db.execute("DELETE FROM queue")
 
-    def remove(self, index: int) -> Track:
+    def remove(self, index: int, expected: Track | None = None) -> Track:
         with self._connect(True) as db:
             row = db.execute(
                 "SELECT position,track FROM queue ORDER BY position LIMIT 1 OFFSET ?", (max(0, index),)
             ).fetchone()
             if index < 0 or row is None:
                 raise MyneError("Queue position is out of range.")
+            if expected is not None and Track.from_dict(json.loads(row[1])) != expected:
+                raise MyneError("The queue changed. Refresh it and select the track again.")
             db.execute("DELETE FROM queue WHERE position=?", (row[0],))
             return Track.from_dict(json.loads(row[1]))
+
+    @staticmethod
+    def _replace_queue(db: sqlite3.Connection, tracks: list[Track]) -> None:
+        db.execute("DELETE FROM queue")
+        db.executemany(
+            "INSERT INTO queue(position,track) VALUES (?,?)",
+            ((index, Store._dump(track)) for index, track in enumerate(tracks)),
+        )
+
+    def move(self, index: int, step: int, expected: Track) -> int:
+        if step not in (-1, 1):
+            raise MyneError("Move a queued track one place up or down.")
+        with self._connect(True) as db:
+            tracks = self._queue(db)
+            if not 0 <= index < len(tracks) or tracks[index] != expected:
+                raise MyneError("The queue changed. Refresh it and select the track again.")
+            target = max(0, min(len(tracks) - 1, index + step))
+            tracks[index], tracks[target] = tracks[target], tracks[index]
+            self._replace_queue(db, tracks)
+            return target
+
+    def shuffle_queue(self) -> int:
+        with self._connect(True) as db:
+            tracks = self._queue(db)
+            random.SystemRandom().shuffle(tracks)
+            self._replace_queue(db, tracks)
+            return len(tracks)
+
+    def skip_to(self, index: int, expected: Track) -> None:
+        """Select an existing queue entry without copying its remaining tracks.
+
+        Validate the displayed selection in the same transaction as the trim,
+        so another client cannot silently make us start a different song.
+        """
+        with self._connect(True) as db:
+            row = db.execute(
+                "SELECT position,track FROM queue ORDER BY position LIMIT 1 OFFSET ?", (index,)
+            ).fetchone()
+            if index < 0 or row is None or Track.from_dict(json.loads(row[1])) != expected:
+                raise MyneError("The queue changed. Refresh it and select the track again.")
+            db.execute("DELETE FROM queue WHERE position<?", (row[0],))
 
     def save_queue(self, name: str = "default") -> int:
         with self._connect(True) as db:
@@ -138,7 +189,37 @@ class Store:
                 "INSERT OR REPLACE INTO snapshots(name,tracks) VALUES (?,?)",
                 (name, json.dumps([t.to_dict() for t in tracks])),
             )
+            db.execute("DELETE FROM playlist_sources WHERE name=?", (name,))
             return len(tracks)
+
+    def import_playlist(self, playlist: Playlist) -> Playlist:
+        """Save a new collection atomically, without replacing names or the queue."""
+        base = playlist.name.strip()[:80] or "Imported playlist"
+        with self._connect(True) as db:
+            name, suffix = base, 2
+            while db.execute("SELECT 1 FROM snapshots WHERE name=?", (name,)).fetchone():
+                ending = f" ({suffix})"
+                name = base[:80 - len(ending)] + ending
+                suffix += 1
+            db.execute("INSERT INTO snapshots(name,tracks) VALUES (?,?)",
+                       (name, json.dumps([t.to_dict() for t in playlist.tracks], ensure_ascii=False)))
+            db.execute("INSERT INTO playlist_sources(name,metadata) VALUES (?,?)", (name, json.dumps({
+                "source": playlist.source, "source_url": playlist.source_url,
+                "warnings": playlist.warnings,
+            }, ensure_ascii=False)))
+        from dataclasses import replace
+        return replace(playlist, name=name)
+
+    def playlist(self, name: str) -> Playlist:
+        with self._connect() as db:
+            row = db.execute("SELECT tracks FROM snapshots WHERE name=?", (name,)).fetchone()
+            if row is None:
+                raise MyneError("This playlist no longer exists. Refresh your library.")
+            source = db.execute("SELECT metadata FROM playlist_sources WHERE name=?", (name,)).fetchone()
+            metadata = json.loads(source[0]) if source else {}
+            return Playlist(name, tuple(Track.from_dict(t) for t in json.loads(row[0])),
+                            metadata.get("source", "Saved queue"), metadata.get("source_url"),
+                            tuple(metadata.get("warnings") or ()))
 
     def restore_queue(self, name: str = "default") -> int:
         with self._connect(True) as db:
@@ -157,9 +238,49 @@ class Store:
         with self._connect() as db:
             return [r[0] for r in db.execute("SELECT name FROM snapshots ORDER BY name")]
 
-    def set_setting(self, key: str, value: Any) -> None:
+    def playlists(self) -> list[tuple[str, int]]:
+        with self._connect() as db:
+            return [
+                (name, len(json.loads(tracks)))
+                for name, tracks in db.execute("SELECT name,tracks FROM snapshots ORDER BY name")
+            ]
+
+    def favorites(self) -> list[Track]:
+        with self._connect() as db:
+            return [Track.from_dict(json.loads(row[0])) for row in db.execute(
+                "SELECT track FROM favorites ORDER BY rowid DESC"
+            )]
+
+    def toggle_favorite(self, track: Track) -> bool:
         with self._connect(True) as db:
-            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)", (key, json.dumps(value)))
+            key = (track.provider, track.id)
+            if db.execute("SELECT 1 FROM favorites WHERE provider=? AND id=?", key).fetchone():
+                db.execute("DELETE FROM favorites WHERE provider=? AND id=?", key)
+                return False
+            db.execute("INSERT INTO favorites(provider,id,track) VALUES (?,?,?)", (*key, self._dump(track)))
+            return True
+
+    def recent_tracks(self, limit: int = 50) -> list[Track]:
+        seen: set[tuple[str, str]] = set()
+        result: list[Track] = []
+        with self._connect() as db:
+            for (raw,) in db.execute("SELECT track FROM history ORDER BY id DESC LIMIT 1000"):
+                track = Track.from_dict(json.loads(raw))
+                key = (track.provider, track.id)
+                if key not in seen:
+                    seen.add(key)
+                    result.append(track)
+                    if len(result) >= limit:
+                        break
+        return result
+
+    def set_setting(self, key: str, value: Any) -> None:
+        self.set_settings({key: value})
+
+    def set_settings(self, values: dict[str, Any]) -> None:
+        rows = [(key, json.dumps(value, allow_nan=False)) for key, value in values.items()]
+        with self._connect(True) as db:
+            db.executemany("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)", rows)
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self._connect() as db:
