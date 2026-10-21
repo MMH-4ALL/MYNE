@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -73,6 +74,8 @@ class PlayerClient:
             fcntl.flock(startup_lock, fcntl.LOCK_EX)
             if self._reachable():
                 return
+            if shutil.which(self.config.mpv_binary) is None:
+                raise PlaybackError("mpv is missing. Install mpv, then run myne doctor and retry playback.")
             environment = os.environ.copy()
             environment.update(self.config.to_env())
             process = subprocess.Popen(

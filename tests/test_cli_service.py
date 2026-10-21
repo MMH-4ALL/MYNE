@@ -1,10 +1,13 @@
 import json
+import subprocess
+import sys
 from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
 from typer.testing import CliRunner
 
+from myne import __version__
 from myne.cli import app
 from myne.config import Config
 from myne.errors import MyneError
@@ -197,3 +200,68 @@ def test_corrupt_database_has_sanitized_json_error(isolated, monkeypatch, tmp_pa
     assert result.exit_code == 1
     assert "error" in json.loads(result.stdout)
     assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("module", ["myne", "myne.cli"])
+def test_module_entry_points_produce_version_output(module):
+    result = subprocess.run([sys.executable, "-m", module, "--version"], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"Myne CLI {__version__}"
+
+
+def test_play_reports_progress_before_a_provider_failure(isolated, monkeypatch):
+    service = Mock()
+    service.resolve.side_effect = MyneError("Provider connection failed")
+    monkeypatch.setattr("myne.cli.application", lambda _ctx: service)
+    result = isolated.invoke(app, ["play", "a song"])
+    assert result.exit_code == 1
+    assert "Resolving the track" in result.stderr
+    assert "Provider connection failed" in result.stderr
+    assert "Playing" not in result.stdout
+    service.play.assert_not_called()
+
+
+def test_play_loading_status_is_not_reported_as_playing(isolated, monkeypatch):
+    service = Mock()
+    track = Track("first", "Song")
+    service.resolve.return_value = track
+    service.play.return_value = {"track":track.to_dict(),"playing":False,"error":None}
+    monkeypatch.setattr("myne.cli.application", lambda _ctx: service)
+    result = isolated.invoke(app, ["play", "Song"])
+    assert result.exit_code == 0
+    assert "Loading audio" in result.stdout
+    assert "Playing" not in result.stdout
+    assert "Resolving the track" in result.stderr
+
+
+def test_json_play_has_no_progress_and_preserves_error_status(isolated, monkeypatch):
+    service = Mock()
+    service.resolve.return_value = Track("first", "Song")
+    service.play.return_value = {"track":None,"playing":False,"error":"Audio output unavailable"}
+    monkeypatch.setattr("myne.cli.application", lambda _ctx: service)
+    result = isolated.invoke(app, ["--json", "play", "Song"])
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {"error":"Audio output unavailable"}
+    assert result.stderr == ""
+
+
+def test_empty_queue_does_not_claim_it_resumed_playback(isolated, monkeypatch):
+    service = Mock()
+    service.control.return_value = {"track":None,"playing":False,"error":None}
+    monkeypatch.setattr("myne.cli.application", lambda _ctx: service)
+    result = isolated.invoke(app, ["play"])
+    assert result.exit_code == 0
+    assert "Nothing is playing" in result.stdout
+    assert "resumed" not in result.stdout
+
+
+def test_play_reports_muted_and_null_output(isolated, monkeypatch):
+    service = Mock()
+    service.resolve.return_value = Track("first", "Song")
+    service.play.return_value = {"track":Track("first", "Song").to_dict(),"playing":True,
+                                 "error":None,"muted":True,"volume":0,"audio_output":"null"}
+    monkeypatch.setattr("myne.cli.application", lambda _ctx: service)
+    result = isolated.invoke(app, ["play", "Song"])
+    assert result.exit_code == 0
+    assert "myne unmute" in result.stdout
+    assert "unset MYNE_AUDIO_OUTPUT" in result.stdout

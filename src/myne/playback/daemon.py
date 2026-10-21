@@ -13,7 +13,7 @@ from collections import deque
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Callable
 
-from myne.errors import MyneError, PlaybackError
+from myne.errors import MyneError, PlaybackError, StreamError
 from myne.models import Track
 from myne.playback.mpv import MpvEngine, private_directory
 
@@ -143,6 +143,17 @@ class PlayerService:
             self._last_tick = self.clock()
             self._history.append(self._key(track))
             try:
+                self.engine.start()
+            except (MyneError, OSError):
+                self._error = (
+                    "The audio player could not start. Run myne doctor and check "
+                    "MYNE_MPV or MYNE_AUDIO_OUTPUT."
+                )
+                self._finish(False, stop_engine=False)
+                self._auto = False
+                self.store.enqueue([*failed, track], front=True)
+                return
+            try:
                 # Fetch radio metadata before starting audio so provider latency
                 # cannot create an uncounted interval of actual listening.
                 if self._radio_seed is not None:
@@ -151,10 +162,12 @@ class PlayerService:
                 stream = self.registry.provider(track.provider).resolve_stream(track)
                 self.engine.play(stream)
                 state = self.engine.snapshot()
-            except Exception:
+            except Exception as exc:
                 # Stream URLs and provider exception details may carry credentials.
                 self._error = (
-                    f"Could not play {track.title}. Check the provider connection and mpv installation."
+                    StreamError.MESSAGES.get(exc.reason, StreamError.MESSAGES["unavailable"])
+                    if isinstance(exc, StreamError)
+                    else f"Could not play {track.title}. Check the provider connection and mpv installation."
                 )
                 self._finish(False, stop_engine=False)
                 failed.append(track)
@@ -165,6 +178,7 @@ class PlayerService:
             self._paused = False
             self._last_tick = self.clock()
             self._counting = bool(state["playing"])
+            self._error = None
             # Retry failed metadata only after the existing queue, so transient
             # failures neither discard music nor immediately spin on one song.
             self.store.enqueue(failed)
@@ -173,7 +187,10 @@ class PlayerService:
         self.store.enqueue(failed, front=True)
         with suppress(MyneError, OSError):
             self.engine.stop()
-        self._error = "Playback stopped after three failed tracks. The queue is saved; fix the connection and run myne play."
+        self._error = (
+            "Playback stopped after three failed tracks. The queue is saved. "
+            + (self._error or "Check your connection and run myne play.")
+        )
 
     def tick(self) -> None:
         with self.lock:
@@ -192,14 +209,28 @@ class PlayerService:
                 )
                 if ended is not None:
                     ended_track = self._active
+                    output_failed = (
+                        ended.get("reason") == "error"
+                        and ended.get("error") == "audio output initialization failed"
+                    )
                     if ended.get("reason") == "error":
                         self._failures += 1
                         self._error = (
-                            "The audio stream failed. Check your connection or choose another track."
+                            "mpv could not open an audio output. Check your sound device and "
+                            "MYNE_AUDIO_OUTPUT, then restart with myne shutdown."
+                            if output_failed
+                            else "The audio stream failed. Check your connection or choose another track."
                         )
                     else:
                         self._failures = 0
                     self._finish(ended.get("reason") == "eof", stop_engine=False)
+                    if output_failed:
+                        # A device failure affects every song. Keep this track
+                        # first instead of consuming/retrying the whole queue.
+                        self._auto = False
+                        if ended_track is not None:
+                            self.store.enqueue([ended_track], front=True)
+                        return
                     if ended.get("reason") == "eof" and ended_track is not None and self._radio_seed is None:
                         if self._repeat == "one":
                             self.store.enqueue([ended_track], front=True)

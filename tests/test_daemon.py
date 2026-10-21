@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from myne.config import Config
-from myne.errors import PlaybackError, ProviderError
+from myne.errors import PlaybackError, ProviderError, StreamError
 from myne.models import Stream, Track
 from myne.playback.client import PlayerClient
 from myne.playback.daemon import PlayerService
@@ -358,6 +358,44 @@ def test_stream_resolution_failures_stop_and_keep_retryable_queue(player: tuple)
     assert "secret" not in service.now()["error"]
     service.tick()
     assert len(provider.resolved) == 3
+
+
+def test_public_stream_failure_hint_survives_background_player(player, monkeypatch):
+    service, store, _, provider, _ = player
+    def fail(_track):
+        raise StreamError("authentication")
+    monkeypatch.setattr(provider, "resolve_stream", fail)
+    track = Track("blocked", "Blocked")
+    with pytest.raises(PlaybackError, match="MYNE_COOKIES_FILE"):
+        service.dispatch("play", tracks=[track.to_dict()])
+    assert store.queue() == [track]
+    assert "MYNE_COOKIES_FILE" in service.now()["error"]
+
+
+def test_audio_engine_failure_stops_before_resolving_streams(player, monkeypatch):
+    service, store, engine, provider, _ = player
+    def fail():
+        raise PlaybackError("upstream detail https://secret.example/?token=private")
+    monkeypatch.setattr(engine, "start", fail)
+    tracks = [Track("first", "First"), Track("second", "Second")]
+    with pytest.raises(PlaybackError, match="myne doctor"):
+        service.dispatch("play", tracks=[t.to_dict() for t in tracks])
+    assert provider.resolved == []
+    assert store.queue() == tracks
+    assert "secret" not in service.now()["error"]
+
+
+def test_audio_output_failure_preserves_current_track_and_stops_auto_advance(player):
+    service, store, engine, provider, _ = player
+    tracks = [Track("first", "First"), Track("second", "Second")]
+    service.dispatch("play", tracks=[t.to_dict() for t in tracks])
+    engine.events.append({"event":"end-file", "reason":"error", "error":"audio output initialization failed"})
+    service.tick()
+    assert store.queue() == tracks
+    assert service.now()["track"] is None
+    assert "MYNE_AUDIO_OUTPUT" in service.now()["error"]
+    service.tick()
+    assert provider.resolved == ["first"]
 
 
 def test_skipped_failed_track_remains_in_queue(player: tuple, monkeypatch: pytest.MonkeyPatch) -> None:

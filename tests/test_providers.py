@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from myne.errors import ProviderError
+from myne.errors import ProviderError, StreamError
 from myne.models import Track
 from myne.providers.local import LocalMusicProvider
 from myne.providers.youtube import YouTubeMusicProvider
@@ -134,6 +134,55 @@ def test_extraction_failures_do_not_leak_signed_urls(capsys: pytest.CaptureFixtu
         getattr(factory.call_args.args[0]["logger"], name)("https://secret.example")
     assert capsys.readouterr().out == ""
     assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("variable", ["SSL_CERT_FILE", "SSL_CERT_DIR"])
+def test_stream_uses_configured_system_certificate_trust(monkeypatch, variable):
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setenv(variable, "/configured/trust")
+    extractor = Mock()
+    extractor.extract_info.return_value = {"url": "https://audio.example/stream"}
+    factory = Mock(return_value=extractor)
+    YouTubeMusicProvider(extractor_factory=factory).resolve_stream(Track("song1", "Song"))
+    options = factory.call_args.args[0]
+    assert options["compat_opts"] == {"no-certifi"}
+    assert not options.get("nocheckcertificate")
+
+
+def test_stream_keeps_default_trust_without_an_openssl_override(monkeypatch):
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    extractor = Mock()
+    extractor.extract_info.return_value = {"url": "https://audio.example/stream"}
+    factory = Mock(return_value=extractor)
+    YouTubeMusicProvider(extractor_factory=factory).resolve_stream(Track("song1", "Song"))
+    options = factory.call_args.args[0]
+    assert "no-certifi" not in options.get("compat_opts", set())
+    assert not options.get("nocheckcertificate")
+
+
+@pytest.mark.parametrize("diagnostic,reason,hint", [
+    ("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed", "certificate", "SSL_CERT_FILE"),
+    ("Sign in to confirm you're not a bot", "authentication", "MYNE_COOKIES_FILE"),
+    ("No supported JavaScript runtime could be found", "runtime", "Node.js 22+"),
+    ("HTTP Error 403: Forbidden", "denied", "denied access"),
+    ("The request timed out", "timeout", "timed out"),
+])
+def test_stream_failure_reports_fixed_actionable_hints(diagnostic, reason, hint, capsys):
+    def factory(options):
+        extractor = Mock()
+        def extract(*_args, **_kwargs):
+            options["logger"].warning(diagnostic + " https://secret.example/?token=private")
+            raise RuntimeError("https://secret.example/?token=private")
+        extractor.extract_info.side_effect = extract
+        return extractor
+    with pytest.raises(StreamError) as caught:
+        YouTubeMusicProvider(extractor_factory=factory).resolve_stream(Track("song1", "Song"))
+    assert caught.value.reason == reason
+    assert hint in str(caught.value)
+    assert "secret" not in str(caught.value) and "private" not in str(caught.value)
+    assert capsys.readouterr() == ("", "")
 
 
 def test_metadata_failure_is_sanitized(metadata: Mock) -> None:

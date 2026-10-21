@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
@@ -10,7 +11,7 @@ from dataclasses import replace
 from typing import Any
 from urllib.parse import urlsplit
 
-from myne.errors import ProviderError
+from myne.errors import ProviderError, StreamError
 from myne.models import Album, Artist, Playlist, Stream, Track
 from myne.providers.base import MusicProvider
 
@@ -18,17 +19,34 @@ from myne.providers.base import MusicProvider
 class _QuietLogger:
     """yt-dlp diagnostics can contain signed URLs and authentication material."""
 
+    def __init__(self) -> None:
+        self.reason = "unavailable"
+        self._priority = 0
+
+    def _record(self, message: str) -> None:
+        text = message.lower()
+        rules = (
+            (100, "certificate", ("certificate_verify_failed", "certificate verify failed", "sslcertverificationerror")),
+            (80, "authentication", ("sign in to confirm", "not a bot", "login required", "sign in to view")),
+            (70, "runtime", ("no supported javascript runtime", "javascript runtime is required")),
+            (60, "denied", ("http error 403", "403 forbidden", "http error 429")),
+            (20, "timeout", ("timed out", "timeouterror")),
+        )
+        for priority, reason, markers in rules:
+            if priority > self._priority and any(marker in text for marker in markers):
+                self.reason, self._priority = reason, priority
+
     def debug(self, message: str) -> None:
-        pass
+        self._record(message)
 
     def info(self, message: str) -> None:
-        pass
+        self._record(message)
 
     def warning(self, message: str) -> None:
-        pass
+        self._record(message)
 
     def error(self, message: str) -> None:
-        pass
+        self._record(message)
 
 
 def _name(value: Any) -> str | None:
@@ -267,18 +285,23 @@ class YouTubeMusicProvider(MusicProvider):
                 factory = YoutubeDL
             except ImportError:
                 raise ProviderError("Install yt-dlp to stream YouTube Music.") from None
+        diagnostics = _QuietLogger()
         options: dict[str, Any] = {
             "format": "bestaudio/best",
             "noplaylist": True,
             "skip_download": True,
             "quiet": True,
             "no_warnings": True,
-            "logger": _QuietLogger(),
+            "logger": diagnostics,
             "socket_timeout": 20,
             "retries": 2,
             "cachedir": False,
             "js_runtimes": {"deno": {}, "node": {}},
         }
+        # yt-dlp otherwise selects certifi even when an administrator supplied
+        # an OpenSSL trust store. Honor that configuration without weakening TLS.
+        if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+            options["compat_opts"] = {"no-certifi"}
         if self.cookies_file:
             options["cookiefile"] = self.cookies_file
         try:
@@ -310,8 +333,6 @@ class YouTubeMusicProvider(MusicProvider):
                 else {}
             )
             return Stream(url=url, headers=headers)
-        except Exception:
-            raise ProviderError(
-                "Could not resolve an audio stream. Update yt-dlp and check your "
-                "connection or configured YouTube cookies."
-            ) from None
+        except Exception as exc:
+            diagnostics.error(str(exc))
+            raise StreamError(diagnostics.reason) from None

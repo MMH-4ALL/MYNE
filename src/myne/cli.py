@@ -21,7 +21,7 @@ from rich.text import Text
 
 from myne import __version__
 from myne.config import Config
-from myne.errors import MyneError
+from myne.errors import MyneError, PlaybackError
 from myne.models import Track
 from myne.motion import AudioMotion, reduced_motion_requested
 from myne.preferences import CHOICES, Preferences
@@ -108,6 +108,27 @@ def emit(ctx: typer.Context, value: Any, message: str | None = None) -> None:
         console.print(Text(message))
 
 
+def playback_progress(ctx: typer.Context, message: str) -> None:
+    if not ctx.obj.get("json"):
+        Console(stderr=True, highlight=False).print(Text(message))
+
+
+def emit_playback(ctx: typer.Context, result: dict[str, Any], description: str) -> None:
+    if result.get("error"):
+        raise PlaybackError(str(result["error"]))
+    if result.get("playing"):
+        message = f"Playing · {description}"
+    elif result.get("track"):
+        message = f"Loading audio · {description}. Run myne now to check playback."
+    else:
+        message = "Nothing is playing. Search for a song or add tracks to the queue."
+    if result.get("muted") or result.get("volume") == 0:
+        message += " Audio is muted; use myne unmute and myne volume 70."
+    if result.get("audio_output") == "null":
+        message += " Output is null (silent); unset MYNE_AUDIO_OUTPUT and run myne shutdown before retrying."
+    emit(ctx, result, message)
+
+
 def duration(seconds: float | None) -> str:
     if seconds is None:
         return "—"
@@ -152,9 +173,11 @@ def play(
     """Stream a query, video ID, YouTube URL, or local file. No query resumes the queue."""
     service = application(ctx)
     if query is None:
+        playback_progress(ctx, "Starting your queue…")
         result = service.control("resume")
-        emit(ctx, result, "Queue resumed.")
+        emit_playback(ctx, result, "your queue")
         return
+    playback_progress(ctx, "Resolving the track…")
     if choose:
         if not sys.stdin.isatty():
             raise MyneError("--choose requires an interactive terminal; omit it to play the first result.")
@@ -169,8 +192,9 @@ def play(
             raise typer.Exit(0)
     else:
         track = service.resolve(query)
+    playback_progress(ctx, "Loading audio…")
     result = service.play([track])
-    emit(ctx, result, f"Playing · {track.title} — {', '.join(track.artists)}")
+    emit_playback(ctx, result, f"{track.title} · {', '.join(track.artists)}")
 
 
 @app.command()
@@ -180,7 +204,8 @@ def album(ctx: typer.Context, album_id: str, play_album: bool = typer.Option(Fal
     service = application(ctx)
     result = service.album(album_id)
     if play_album:
-        emit(ctx, service.play(list(result.tracks)), f"Playing album · {result.title}")
+        playback_progress(ctx, "Loading album audio…")
+        emit_playback(ctx, service.play(list(result.tracks)), result.title)
     elif ctx.obj.get("json"):
         emit(ctx, asdict(result))
     else:
@@ -287,7 +312,8 @@ def playlist_show(ctx: typer.Context, name: str) -> None:
 @handled
 def playlist_play(ctx: typer.Context, name: str) -> None:
     service = application(ctx)
-    emit(ctx, service.play(list(service.playlist(name).tracks)), f"Playing playlist · {name}")
+    playback_progress(ctx, "Loading playlist audio…")
+    emit_playback(ctx, service.play(list(service.playlist(name).tracks)), name)
 
 
 @playlist_app.command("queue")
@@ -684,3 +710,7 @@ def main() -> None:
     except MyneError as exc:
         console.print(Text(f"Myne: {exc}", style="red"))
         raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

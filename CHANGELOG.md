@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.1
+
+- Fix the silent `python -m myne.cli` entry point. Module and installed-command
+  invocations now both reach the CLI.
+- Honor an explicitly configured OpenSSL certificate store (`SSL_CERT_FILE` or
+  `SSL_CERT_DIR`) during stream extraction. TLS verification stays enabled.
+- Report credential-free reasons for certificate, sign-in, JavaScript-runtime,
+  access-denied and timeout failures through both the CLI and UI player.
+- Print human-readable progress while resolving/loading music, keep JSON clean,
+  and distinguish loading, playing, empty queues, mute and silent null output.
+- Check mpv before launching the background player; start the audio engine
+  before remote stream lookup. Preserve the queue when output initialization
+  fails, with an explicit device/output error instead of cycling more songs.
+
 ## 0.5.0
 
 - A refreshed Studio workspace with collection headings, source and duration

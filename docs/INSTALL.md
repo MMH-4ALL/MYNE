@@ -60,6 +60,23 @@ myne queue add "Faint"
 myne ui
 ```
 
+If the installed command is not on PATH, use `python -m myne` with the same
+arguments. `python -m myne.cli` is also supported. `myne ui` opens the interface;
+`myne` alone prints command help. Human playback commands print progress while
+resolving/loading a track; `--json` keeps stdout machine-readable.
+
+`Loading audio` means the player accepted the request but audio has not started
+yet. `myne now` shows the later state and any stream/output failure. If mpv is
+missing, install it before retrying. If output is `null`, remove that diagnostic
+`MYNE_AUDIO_OUTPUT` override and run `myne shutdown` before starting playback.
+
+On a network with a configured certificate store, stream extraction honors
+`SSL_CERT_FILE` and `SSL_CERT_DIR`, with certificate verification enabled. Use a
+valid administrator-provided trust store; do not disable TLS verification.
+YouTube may require your account cookies or deny a particular stream. MYNE now
+shows that reason rather than reducing it to a generic playback error. See the
+authentication section below; MYNE does not bypass account or regional limits.
+
 `myne play` starts the detached service on demand. The service owns mpv and
 continues until `myne shutdown`, logout or system shutdown. Closing the TUI does
 not stop music. The service is a per-user process, not a system service or
