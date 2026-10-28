@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2
+
+- Reject invalid saved or imported track metadata instead of treating null IDs
+  and titles as the song named `None`, or splitting artist strings into letters.
+- Validate provider, album, artist/genre lists and finite non-negative durations
+  before track data reaches the queue or playback service.
+
 ## 0.5.1
 
 - Fix the silent `python -m myne.cli` entry point. Module and installed-command

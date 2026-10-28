@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "myne-cli"
-version = "0.5.1"
+version = "0.5.2"
 description = "My Music. My Queue. My Experience. A terminal-first streaming music player."
 readme = "README.md"
 requires-python = ">=3.12"
