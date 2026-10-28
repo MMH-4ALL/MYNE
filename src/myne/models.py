@@ -1,5 +1,6 @@
 """Provider-independent, serializable domain objects."""
 
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -19,13 +20,35 @@ class Track:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Track":
+        for key in ("id", "title"):
+            if not isinstance(data.get(key), str) or not data[key].strip():
+                raise ValueError(f"Track {key} must be a non-empty string.")
+        provider = data.get("provider", "youtube")
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError("Track provider must be a non-empty string.")
+        for key in ("artists", "genres"):
+            values = data.get(key)
+            if values is not None and (
+                not isinstance(values, (list, tuple))
+                or any(not isinstance(value, str) for value in values)
+            ):
+                raise ValueError(f"Track {key} must be a list of strings.")
+        album = data.get("album")
+        if album is not None and not isinstance(album, str):
+            raise ValueError("Track album must be a string or null.")
+        raw_duration = data.get("duration")
+        duration = float(raw_duration) if raw_duration is not None else None
+        if isinstance(raw_duration, bool) or duration is not None and (
+            not math.isfinite(duration) or duration < 0
+        ):
+            raise ValueError("Track duration must be a finite, non-negative number.")
         return cls(
-            id=str(data["id"]),
-            title=str(data["title"]),
+            id=data["id"],
+            title=data["title"],
             artists=tuple(data.get("artists") or ()),
-            duration=float(data["duration"]) if data.get("duration") is not None else None,
-            album=data.get("album"),
-            provider=str(data.get("provider", "youtube")),
+            duration=duration,
+            album=album,
+            provider=provider,
             genres=tuple(data.get("genres") or ()),
         )
 
